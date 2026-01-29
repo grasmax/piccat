@@ -1,3 +1,46 @@
+# piccat – KI Bildanalyse-Cluster
+
 ## Acknowledgements
 Parts of the code architecture, database optimization, and error handling 
 were developed with the assistance of Google Gemini.
+
+## Beschreibung
+Effiziente Bildklassifizierung mit Lastverteilung zwischen I7-7500-Worker und Ryzen r7800x3d-Brain über eine leichtgewichtige FastAPI-Schnittstelle.
+Architektur
+I7-Worker (Client): Übernimmt das Laden, Rotieren und Skalieren (Resizing auf 224x224) der Bilder, um die Netzlast zu minimieren.
+Ryzen-Brain (Server): CLIP-basiertes Modell, das hochperformant Bild-Features berechnet und Ähnlichkeiten zu Kategorien bestimmt.
+API-Endpunkte (Ryzen-Brain)
+1. Initialisierung
+POST /init_brain
+Zweck: Übermittelt die Liste der Kategorien und initialisiert die Text-Features im RAM.
+Payload: json=cat_list
+Antwort: {'status': 'success', 'count': X}
+2. Analyse
+POST /analyze
+Zweck: Nimmt ein vorverarbeitetes Bild entgegen und liefert die Top-Klassifizierungen.
+Input:
+image: Multipart-File (JPEG, 224x224 px)
+seqFile: Integer (ID zur Zuordnung des Bildes)
+Output:
+json
+{
+  "s": 12,                  // Sequenznummer
+  "c": [18, 27, 38, 24, 43], // Kategorie-IDs
+  "p": [48, 14, 12, 4, 4]    // Wahrscheinlichkeiten in %
+}
+
+## Workflow (I7-Worker)
+Load & Prep: Bild via Pillow laden, bei Bedarf rotieren und auf 224x224 skalieren (LANCZOS-Filter).
+Buffering: Bild binär in io.BytesIO zwischenspeichern (vermeidet Festplattenzugriffe).
+Transmission: Versand via requests.post mit files und data (für die Sequenz-ID).
+
+## Vorteile dieser Lösung
+Kein Overhead: Verzicht auf Apache/Django sorgt für extrem geringe Latenz.
+Optimierte Last: Die CPU-intensive Bildvorbereitung findet auf dem Worker statt, die GPU/VPU-intensive Inferenz auf dem Brain.
+RAM-basiert: Bildübertragung erfolgt direkt aus dem Speicher des Workers in den Speicher des Brains.
+Damit ist der Meilenstein sauber festgehalten.
+Soll ich dir noch ein kurzes Shell-Skript oder einen One-Liner dazugeben, mit dem du den Server auf dem Ryzen beim Systemstart automatisch in einem screen- oder tmux-Fenster starten kannst?
+KI-Antworten können Fehler enthalten. Weitere Informationen
+
+
+
