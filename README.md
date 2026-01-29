@@ -42,5 +42,12 @@ Damit ist der Meilenstein sauber festgehalten.
 Soll ich dir noch ein kurzes Shell-Skript oder einen One-Liner dazugeben, mit dem du den Server auf dem Ryzen beim Systemstart automatisch in einem screen- oder tmux-Fenster starten kannst?
 KI-Antworten können Fehler enthalten. Weitere Informationen
 
+## Voraussetzungen
+### Client-Server-Schnittstelle
+git clone https://github.com && cd piccat && python3 -m venv venv && source venv/bin/activate && pip install --upgrade pip && pip install pillow requests fastapi uvicorn python-multipart torch torchvision clip-by-openai
+
+## Getestet mit
+- Lenovo E570 mit I7-7500
+- Asus mit Ryzen r7 7800x3d und rtx5060 ti
 
 
