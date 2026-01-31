@@ -15,14 +15,29 @@
 import os
 import io
 import signal
+
+print("Lade torch") 
 import torch
+
+print("Lade clip") 
 import clip
+
+print("Lade weitere Module") 
 from PIL import Image
 from fastapi import FastAPI, File, UploadFile, Form
 from typing import List, Dict
 import uvicorn
 
+from pydantic import BaseModel 
+from tqdm import tqdm
+
 app = FastAPI(title="PicCat AI Brain - API Mode")
+
+# Definiere ein Pydantic Modell, das die erwartete Struktur beschreibt
+class InitRequest(BaseModel):
+    categories: List[Dict]
+    total_items: int # Der neue Integer-Wert
+
 
 # Globale Variablen
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -30,24 +45,53 @@ model = None
 preprocess = None
 text_features = None
 category_ids = []  # Liste der seqCat IDs
+#global_pbar = None
+max_files = 0
 
 # Modell beim Import/Start einmalig laden
 print(f"--- Lade CLIP Modell auf {device} ---")
 model, preprocess = clip.load("ViT-B/32", device=device)
 
+# Fragmente aus den Versuchen mit bHalfPrec
+#  if self.device == "cuda" and self.bHalfPrec:
+#             #1+2model.half() # Nutzt die Tensor-Cores der RTX 5060 Ti optimal aus
+#             #2 for param in model.parameters():
+#             #2    param.data = param.data.to(torch.float16)
+#             #3model.to(torch.float16)
+#             #4:
+#             self.model.float() # Erst sicherstellen, dass alles Float ist
+#             clip.model.convert_weights(self.model) # Dann gezielt in Half konvertieren
+
+
+
 @app.post("/init_brain")
-async def init_brain(categories: List[Dict]):
+async def init_brain(request_data: InitRequest):
     """
-    Empfängt Liste von {'id': seqCat, 'text': sAiText}.
-    Berechnet die Text-Features für CLIP vor.
+    Empfängt Liste von {'id': seqCat, 'text': sAiText} und Gesamtanzahl.
+    Berechnet die Text-Features für CLIP vor und initialisiert den Fortschrittsbalken.
     """
-    global text_features, category_ids
+    global text_features, category_ids # , global_pbar
+
     
     try:
-        ids = [c['id'] for c in categories]
-        texts = [c['text'] for c in categories]
+       
+       # Zugriff auf die Daten über das request_data Objekt
+        ids = [c['id'] for c in request_data.categories]
+        texts = [c['text'] for c in request_data.categories]
+
+        max_files = request_data.total_items
+
+        print(f"Brain-Init mit {len(texts)} Kategorien und device={device}...")
         
-        print(f"Tokenisiere {len(texts)} Kategorien...")
+        # # funktioniert hier nicht, weil uvicorn mit Ausschriften wie "INFO:     192.168.2.2:13760 - "POST /analyze HTTP/1.1" 200 OK" dazwischenfunkt
+        # # und die Fortschrittszeile danach immer wieder neu ausgegeben wird:
+        # # den tqdm Balken initialisieren:
+        # if global_pbar is not None:
+        #     global_pbar.close() # Schließt den alten tqdm-Balken
+        #     global_pbar = None
+        # if global_pbar is None:
+        #     global_pbar = tqdm(total=max_files, desc="Bild-Analyse (Server)", leave=True)
+
         text_tokens = clip.tokenize(texts).to(device)
         
         with torch.no_grad():
@@ -55,13 +99,13 @@ async def init_brain(categories: List[Dict]):
             text_features /= text_features.norm(dim=-1, keepdim=True)
             
         category_ids = ids
-        return {"status": "success", "count": len(category_ids)}
+        return {"init_brain()": "success", "count": len(category_ids)}
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        return {"init_brain": "error", "message": str(e)}
 
 @app.post("/analyze")
 async def analyze(
-    seqFile: int = Form(...), 
+    lfdNr: int = Form(...), 
     image: UploadFile = File(...)  # 'image' muss dem Key im Client entsprechen
 ):
     """ Hauptanalyse-Funktion """
@@ -69,6 +113,8 @@ async def analyze(
         return {"error": "Brain nicht initialisiert. Bitte zuerst /init_brain aufrufen."}
 
     try:
+        #global_pbar.set_postfix(file=seqFile)
+
         image_bytes = await image.read() 
 
         pil_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
@@ -88,13 +134,16 @@ async def analyze(
         res_ids = [category_ids[idx] for idx in indices[0].tolist()]
         res_conf = [int(val * 100) for val in values[0].tolist()]
 
+        #global_pbar.update(1)
+        print(f"{lfdNr}/{max_files}, {res_ids}, {res_conf}")
+
         return {
-            "s": seqFile,
+            "n": lfdNr,
             "c": res_ids,
             "p": res_conf
         }
     except Exception as e:
-        return {"error": str(e), "s": seqFile}
+        return {"error": str(e), "n": lfdNr}
 
 @app.get("/exit")
 async def exit_server():
