@@ -1,12 +1,12 @@
 # piccat – KI Bildanalyse-Cluster
 
 ## Evolution
-(https://github.com/grasmax/piccat/blob/main/piccat_csv.py)
-(https://github.com/grasmax/piccat/blob/main/piccat_db.py)
-(https://github.com/grasmax/piccat/blob/main/createdb.sql)
-(https://github.com/grasmax/piccat/blob/main/piccat_server.py)
-(https://github.com/grasmax/piccat/blob/main/piccat_client.py)
-(https://github.com/grasmax/piccat/blob/main/piccat_viewer_tki.py)
+- [piccat_csv.py](https://github.com/grasmax/piccat/blob/main/piccat_csv.py) ... lokale Analyse, Ergebnis in CSV-Datei
+- [piccat_db.py](https://github.com/grasmax/piccat/blob/main/piccat_db.py) ... lokale Analyse, Ergebnis in MariaDB
+- [createdb.sql](https://github.com/grasmax/piccat/blob/main/createdb.sql) ... Datenbank-Schema für Dateien und Analyse-Ergebnisse
+- [piccat_server.py](https://github.com/grasmax/piccat/blob/main/piccat_server.py) ... Analyse in Server ausgelagert
+- [piccat_client.py](https://github.com/grasmax/piccat/blob/main/piccat_client.py) ... Dateiarbeit, Server calls und Speicherung der Ergebnisse in MariaDb
+- [piccat_viewer_tki.py](https://github.com/grasmax/piccat/blob/main/piccat_viewer_tki.py) ... Anzeige der Ergebnisse
 
 ## Beschreibung
 Effiziente Bildklassifizierung mit Lastverteilung zwischen I7-7500-Worker und Ryzen r7800x3d-Brain über eine leichtgewichtige FastAPI-Schnittstelle.
@@ -58,7 +58,7 @@ git clone https://github.com && cd piccat && python3 -m venv venv && source venv
 - Dauer ca 5h30
 
 ## Acknowledgements
-Parts of the code architecture, database optimization, and error handling 
+Parts of the code architecture, database optimization, viewer and error handling 
 were developed with the assistance of Google Gemini.
 
 
