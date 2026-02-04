@@ -37,12 +37,17 @@ class PicCatApp (CBaseApp):
          self.root.title("Bildanalyse - piccat")
          self.root.geometry("1000x700")
 
+         self.resize_timer = None # Flackern bei Fentergrößenänderungen verändern
+         self.root.bind("<Configure>", self.on_window_resize)  # um Fenstergrößenänderungen mitzubekommen
+
+
          self.image_queue = queue.Queue()
          self.loading_active = False
          self.check_queue() # Startet die Überwachung der Queue
 
          self.DictShow = {} # anzuzeigende Dateien
-
+         self.AnzNebeneinander = 1 # Bildkacheln nebeneinander
+         self.tiles = {} # Speichert Referenzen auf die Labels in den Kacheln
 
          # # 1. Hauptmenü
          # menubar = tk.Menu(root)
@@ -91,7 +96,7 @@ class PicCatApp (CBaseApp):
 
          #canvas.pack(side="left", fill="both", expand=True)
          #scrollbar.pack(side="right", fill="y")
-         pw.add(left_frame, weight=1)
+         pw.add(left_frame, weight=0) #, weight=1) #weight=0 bewirkt, dass beim Größerziehen des Hauptfensters nur der Bildteil vergrößert wird
 
 
          ###################################################################################################
@@ -193,6 +198,56 @@ class PicCatApp (CBaseApp):
       finally:
         cur.close()
 
+
+   def update_grid(self):
+      # 1. Alte Ladevorgänge signalisieren, dass sie stoppen sollen
+      self.loading_active = False 
+    
+      # 2. Queue leeren (alle verbleibenden Aufgaben löschen)
+      while not self.image_queue.empty():
+         try:
+            self.image_queue.get_nowait()
+         except:
+            break
+
+# #$$ {
+#       # 3. GUI leeren
+#       for widget in self.scrollable_frame.winfo_children():
+#          widget.destroy()
+#       self.tiles.clear()
+
+       # dynamische Spaltenberechnung ...
+      window_width = self.root.winfo_width() # Fensterbreite abrufen 
+      if window_width < 200: 
+         window_width = 800 # (Standardwert 800 falls noch nicht gerendert)
+    
+      tile_width = 240 # Kachelbreite (224px Bild + Padding/Border)
+      self.AnzNebeneinander = max(1, window_width // tile_width)  # Berechnen, wie viele Kacheln reinpassen (mindestens 1)
+
+    # # Weiter im bestehenden Code mit der variablen 'cols'
+    # for i, row_data in enumerate(self.DictShow[start:end]):
+    #     r, c = divmod(i, cols)
+    #     lbl = tk.Label(self.scrollable_frame, text="Lade...", ...)
+    #     lbl.grid(row=r, column=c, padx=5, pady=5)
+    #     self.tiles[start + i] = lbl
+
+
+
+#       # 4. Laden wieder freigeben und neuen Thread starten
+#       self.loading_active = True
+#       threading.Thread(target=self.image_loader_thread, args=(image_paths, start_idx), daemon=True).start()
+# #$$ }
+      self.load_page()
+
+   def on_window_resize(self, event):
+      if event.widget == self.root:
+        # Falls ein Timer läuft: löschen
+        if self.resize_timer:
+            self.root.after_cancel(self.resize_timer)
+        # Neuen Timer starten
+        self.resize_timer = self.root.after(200, self.update_grid)
+
+
    ###### image_loader_thread(self, paths, start_offset) ##############################################################################
    def image_loader_thread(self, paths, start_offset):
         """Arbeitet im Hintergrund: Lädt und skaliert Bilder."""
@@ -238,8 +293,11 @@ class PicCatApp (CBaseApp):
         self.loading_active = False # Alten Ladevorgang stoppen
         
         # Grid leeren
+        self.canvas.yview_moveto(0) # Nach oben scrollen
         for widget in self.grid_frame.winfo_children():
             widget.destroy()
+        if self.tiles:
+            self.tiles.clear()
 
         if self.DictShow == None or len(self.DictShow) <= 0:
            return;
@@ -252,11 +310,15 @@ class PicCatApp (CBaseApp):
         # Erstmal nur leere Kacheln mit "Laden..." Text erstellen
         for i in range(start_idx, end_idx):
             rel_idx = i - start_idx
-            row, col = divmod(rel_idx, 3)
+            row, col = divmod(rel_idx, self.AnzNebeneinander)
             
+
             tile = tk.Frame(self.grid_frame, width=224, height=224, relief="ridge", borderwidth=1)
             tile.grid(row=row, column=col, padx=2, pady=2)
-            tile.grid_propagate(False)
+            
+            # Größen-Fixierung: tile.grid_propagate(False) ist wichtig, 
+            # damit die Kacheln exakt 224x224 Pixel groß bleiben, auch wenn das Bild darin kleiner ist.
+            tile.grid_propagate(False) 
             
             lbl = tk.Label(tile, text="Lade...")
             lbl.pack(expand=True, fill="both")
@@ -270,9 +332,9 @@ class PicCatApp (CBaseApp):
         image_paths = [x['sFile'] for x in subset]
         threading.Thread(target=self.image_loader_thread, args=(image_paths, start_idx), daemon=True).start()
 
-        # # UI aktualisieren
-        # self.page_label.config(text=f"Bilder {start_idx+1} bis {end_idx} (Seite {self.current_page+1})")
-        # self.canvas.yview_moveto(0) # Nach oben scrollen
+        # UI aktualisieren
+        self.page_label.config(text=f"Bilder {start_idx+1} bis {end_idx} (Seite {self.current_page+1})")
+        self.canvas.yview_moveto(0) # Nach oben scrollen
 
     # Navigations-Logik
    def go_start(self):
