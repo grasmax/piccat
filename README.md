@@ -1,8 +1,12 @@
 # piccat – KI Bildanalyse-Cluster
 
-## Acknowledgements
-Parts of the code architecture, database optimization, and error handling 
-were developed with the assistance of Google Gemini.
+## Evolution
+(https://github.com/grasmax/piccat/blob/main/piccat_csv.py)
+(https://github.com/grasmax/piccat/blob/main/piccat_db.py)
+(https://github.com/grasmax/piccat/blob/main/createdb.sql)
+(https://github.com/grasmax/piccat/blob/main/piccat_server.py)
+(https://github.com/grasmax/piccat/blob/main/piccat_client.py)
+(https://github.com/grasmax/piccat/blob/main/piccat_viewer_tki.py)
 
 ## Beschreibung
 Effiziente Bildklassifizierung mit Lastverteilung zwischen I7-7500-Worker und Ryzen r7800x3d-Brain über eine leichtgewichtige FastAPI-Schnittstelle.
@@ -47,7 +51,16 @@ KI-Antworten können Fehler enthalten. Weitere Informationen
 git clone https://github.com && cd piccat && python3 -m venv venv && source venv/bin/activate && pip install --upgrade pip && pip install pillow requests fastapi uvicorn python-multipart torch torchvision clip-by-openai
 
 ## Getestet mit
-- Lenovo E570 mit I7-7500
-- Asus mit Ryzen r7 7800x3d und rtx5060 ti
+- Lenovo E570 mit I7-7500 / Windows 10 Prof / MariaDB / tkinter viewer
+- Asus mit Ryzen r7 7800x3d und rtx5060 ti / Windows 11 Prof / torch + clip
+- Lenovo <--> fastapi <--> Asus
+- ca. 90000 Dateien,  182.977 Konfidenzsätze
+- Dauer ca 5h30
+
+## Acknowledgements
+Parts of the code architecture, database optimization, and error handling 
+were developed with the assistance of Google Gemini.
+
+
 
 
