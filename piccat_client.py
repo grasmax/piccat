@@ -157,11 +157,12 @@ class CBildAnalyse (CBaseApp):
          self.dbFolder = {}
          self.fsFolder = {}
          self.iAllFiles = 0
-         self.anzErlFolder = self.anzDateienErledigt = 0
+         self.anzErlFolder = self.anzDateienErledigt = self.anzDateienVorhanden = self.anzDateienFehler = 0 
 
          self.sAufgabe =  self.Settings['Bildanalyse']['Aufgabe']
          self.sAufgabeVoll =  self.Settings['Bildanalyse']['Aufgaben']['AufgabeVoll']
          self.sAufgabeNeu  =  self.Settings['Bildanalyse']['Aufgaben']['AufgabeNeu']
+         self.bVervollstaendigen = True if self.sAufgabe == self.sAufgabeVoll else False
 
          self.iDateienMaximal  =  self.Settings['Bildanalyse']['DateienMaximal']
          self.sModell =  self.Settings['Bildanalyse']['Modell']
@@ -196,8 +197,12 @@ class CBildAnalyse (CBaseApp):
          self.dCallSumSec = 0.0  # im Server verbrachte Zeitdauer  in Sekunden
 
 
+         self.t21700 = None
+         self.t36800 = None
+         self.t47700 = None
+
       except Exception as e:
-         self.Exception2Log(f'Ausnahme in CBildAnalyse.vInit()',e)
+         self.Exception2Log(f'CBildAnalyse.vInit()',e)
          self.vScriptAbbruch("")
 
    ###### def EinstellungenInsLog(self) ##############################################################################
@@ -205,14 +210,14 @@ class CBildAnalyse (CBaseApp):
       try:
          sSett = f"""Beginn: {self.sNow} PC: {self.sHostName} Einstellungen: Verzeichnis: {self.sDateipfad}, 
                   Ergebnisse --> {self.sErgebnisSpeicher} {self.sResultFile if self.sErgebnisSpeicher == self.sErgCsv else ""} 
-                  Aufgabe: {self.sAufgabe} Dateien maximal: {self.iDateienMaximal}, Treffer maximal: {self.MaxTrefferAnzahl} 
-                  MinTrefferProzent: {self.iMinTrefferProzent}
+                  Aufgabe: {self.sAufgabe}, maximal {self.iDateienMaximal} Dateien
+                  Nur Treffer mit mehr als {self.iMinTrefferProzent} Prozent,  maximal {self.MaxTrefferAnzahl} Treffer pro Datei
                   Analyse: {self.sOrt} {self.sServerIp if self.sOrt==self.sOrtServer else ""} {self.url_base if self.sOrt==self.sOrtServer else ""}
                   Modell: {self.sModell}, HalfPrec={'ja' if self.bHalfPrec else 'nein'}"""
          self.Info2Log(sSett)
 
       except Exception as e:
-         self.Exception2Log(f'Ausnahme in EinstellungenInsLog()',e)
+         self.Exception2Log(f'EinstellungenInsLog()',e)
          self.vScriptAbbruch("")
 
 
@@ -227,13 +232,12 @@ class CBildAnalyse (CBaseApp):
                   Anzahl DB-Verzeichnisse: {len(self.dbFolder)} davon erledigt: {self.anzErlFolder} 
                   Anzahl Dateien: {self.iAllFiles} davon erledigt: {self.anzDateienErledigt} 
                   Schnellste Bildanalyse: {self.dCallMinSec} langsamste Bildanalyse: {self.dCallMaxSec} 
-                  Anteil der Bildanalyse an der Verarbeitungsdauer: {self.dCallSumSec} 
-                  Gesamtdauer: {sDau}, Verarbeitungsdauer: {sDauVerarb}
+                  Gesamtdauer: {sDau} Verarbeitungsdauer: {sDauVerarb} Dauer Bildanalyse in Sekunden: {self.dCallSumSec}
                     """
          self.Info2Log(sResult)
 
       except Exception as e:
-         self.Exception2Log(f'Ausnahme in ErgebnisseInsLog()',e)
+         self.Exception2Log(f'ErgebnisseInsLog()',e)
          self.vScriptAbbruch("")
 
 
@@ -254,7 +258,7 @@ class CBildAnalyse (CBaseApp):
             return rec[0]
 
       except Exception as e:
-         self.Exception2Log(f'Ausnahme in ErmittleLaufNummer()',e)
+         self.Exception2Log(f'ErmittleLaufNummer()',e)
          return -1
       finally:
         cur.close()
@@ -277,7 +281,7 @@ class CBildAnalyse (CBaseApp):
             return LaufNr
 
       except Exception as e:
-         self.Exception2Log(f'Ausnahme in GibNeueLaufNummer()',e)
+         self.Exception2Log(f'GibNeueLaufNummer()',e)
          return -1
       finally:
         cur.close()
@@ -303,7 +307,7 @@ class CBildAnalyse (CBaseApp):
          self.mdb.commit()
 
       except Exception as e:
-         self.Exception2Log(f'Ausnahme in LiesKategorien()',e)
+         self.Exception2Log(f'LiesKategorien()',e)
       finally:
         cur.close()
 
@@ -319,7 +323,7 @@ class CBildAnalyse (CBaseApp):
            sStmt = f"delete from {self.MariaDbName}.piccat_tab_folder where sName = ?"
            cur.execute( sStmt, (sFolder,))
       except Exception as e:
-         self.Exception2Log(f'Ausnahme in VerzeichnisLoeschen()',e)
+         self.Exception2Log(f'VerzeichnisLoeschen()',e)
       finally:
          pass
 
@@ -338,9 +342,26 @@ class CBildAnalyse (CBaseApp):
          cur.execute( sStmt, (seqFolder, sFolder, self.iLaufNr))
 
       except Exception as e:
-         self.Exception2Log(f'Ausnahme in VerzeichnisAnlegen()',e)
+         self.Exception2Log(f'VerzeichnisAnlegen()',e)
       finally:
          pass
+
+
+   def LiesVerzeichnisse(self, start_folder):
+      ergebnis_liste = {}
+    
+      for root, dirs, files in os.walk(start_folder):
+         # 1. Verzeichnisse, die mit "000" beginnen, ignorieren (und nicht betreten)
+         dirs[:] = [d for d in dirs if not d.startswith("000")]
+        
+         # 2. Prüfen, ob im aktuellen Verzeichnis jpeg/jpg Dateien liegen
+         # case-insensitive Prüfung (.JPG, .jpeg etc.)
+         hat_bilder = any(f.lower().endswith(('.jpg', '.jpeg')) for f in files)
+        
+         if hat_bilder:
+            ergebnis_liste[root] = os.path.basename(root)
+            
+      return ergebnis_liste
 
 
    ###### AktualisiereVerzeichnisse(self) ##############################################################################
@@ -349,7 +370,11 @@ class CBildAnalyse (CBaseApp):
          self.Info2Log(f"Unterverzeichnisse zu {self.sDateipfad} aus dem Dateisystem lesen...")
 
          pfad = Path(self.sDateipfad)
-         self.fsFolder = {str(d): d.name for d in pfad.rglob('*') if d.is_dir()}
+
+         # langsam und keine 000 und jp*-Berücksictigung
+         # self.fsFolder = {str(d): d.name for d in pfad.rglob('*') if d.is_dir()}
+         # viel besser:
+         self.fsFolder = self.LiesVerzeichnisse(self.sDateipfad)
 
          self.fsFolder[self.sDateipfad] = self.sDateipfad
 
@@ -386,7 +411,7 @@ class CBildAnalyse (CBaseApp):
          self.mdb.commit()
    
       except Exception as e:
-         self.Exception2Log(f'Ausnahme in AktualisiereVerzeichnisse()',e)
+         self.Exception2Log(f'AktualisiereVerzeichnisse()',e)
       finally:
         cur.close()
 
@@ -403,7 +428,7 @@ class CBildAnalyse (CBaseApp):
          self.Info2Log(f"Dateianzahl (*.jp*): {self.iAllFiles}")
          
       except Exception as e:
-         self.Exception2Log(f'Ausnahme in ErmittleDateiAnzahl()',e)
+         self.Exception2Log(f'ErmittleDateiAnzahl()',e)
     
       finally:
          pass
@@ -440,9 +465,85 @@ class CBildAnalyse (CBaseApp):
 
 
       except Exception as e:
-         self.Exception2Log(f'Ausnahme in InitialisiereModell()',e)
+         self.Exception2Log(f'InitialisiereModell()',e)
       finally:
          pass
+
+
+   ###### DateiAnlegen(self, seqFolder, sFile, dtExif, cur) ##############################################################################
+   def DateiAnlegen(self, seqFolder, sFile, dtExif, cur):
+      try:
+         sStmt = f"SELECT NEXT VALUE FOR {self.MariaDbName}.piccat_seq_file;"
+         cur.execute( sStmt)
+         rec = cur.fetchone()
+         if rec == None:
+            self.vScriptAbbruch(f'Fehler in DateiAnlegen() / {sStmt}'  )
+         seqFile = rec[0]
+
+         sStmt = f"INSERT INTO {self.MariaDbName}.piccat_tab_file (seqFile, sName, seqFolder, seqRun, dtExif) VALUES ( ?, ?, ?, ?, ?)"
+         cur.execute( sStmt, (seqFile, sFile, seqFolder, self.iLaufNr, dtExif))
+
+         return seqFile
+
+      except KeyboardInterrupt:
+         self.mdb.commit()
+         self.Info2Log("\nProgramm MIT STRG+C abgebrochen.")
+         self.vEndeNormal( self.Abschluss())
+      except Exception as e:
+         self.Error2Log(f'Datei: {sFile}'  )
+         self.Exception2Log(f'DateiAnlegen()',e)
+         return -1
+      finally:
+         pass
+
+   ###### DateiLoeschen(self, seqFile, sFile, cur) ##############################################################################
+   def DateiLoeschen(self, seqFile, sFile, cur):
+      try:
+         #self.Info2Log(f"Dateien und Konfidenzen für {sFile}/{seqFile} aus der DB löschen...")
+
+         sStmt = f"delete from {self.MariaDbName}.piccat_tab_confidence where seqFile = {seqFile}"
+         cur.execute( sStmt)
+
+         sStmt = f"delete from {self.MariaDbName}.piccat_tab_file where sName = ? and sSeqRun={self.iLaufNr}"
+         cur.execute( sStmt, (sFile,))
+
+      except Exception as e:
+         self.Exception2Log(f'DateiLoeschen({sFile}/{seqFile})',e)
+         return -1
+      finally:
+         pass
+
+   ###### DbDateienLesen(self, sFolder, seqFolder, cur) ##############################################################################
+   def DbDateienLesen(self, sFolder, seqFolder, cur):
+      try:
+         #self.Info2Log(f"Dateien für {sFolder} (Seq: {seqFolder})  aus der DB lesen...")
+
+         aDbFiles = {}
+
+         sStmt = f"""SELECT f.sName, f.seqFile, f.seqRun, count(c.seqFile) 
+                        FROM {self.MariaDbName}.piccat_tab_file f 
+                        LEFT join {self.MariaDbName}.piccat_tab_confidence c ON  c.seqFile = f.seqFile 
+                        WHERE f.seqFolder = ? GROUP BY f.seqFile"""
+
+         cur.execute( sStmt, (seqFolder, ))
+         rec = cur.fetchone()
+         if rec == None:
+            pass #self.Info2Log(f'Keine Dateien zu Folder gefunden in piccat_tab_file')
+         else:
+            while rec != None:
+               sName = rec[0]
+               aDbFiles[sName] = CDbFileInfo(rec[1],seqFolder,rec[2], rec[3], bDelete=False)
+               rec = cur.fetchone()
+
+         return aDbFiles
+
+      except Exception as e:
+         self.Exception2Log(f'DbDateienLesen({sFolder} (Seq: {seqFolder}))',e)
+         return None
+      finally:
+         pass
+
+
 
    ###### Zeitmessung(self, tStart) ##############################################################################
    def Zeitmessung(self, tStart):
@@ -458,6 +559,36 @@ class CBildAnalyse (CBaseApp):
          self.dCallMaxSec = dau
 
       self.dCallSumSec += dau  # Zeitdauer  in Sekunden
+
+
+   ###### NimmZwischenzeit(self) ##############################################################################
+   def NimmZwischenzeit(self):
+
+      if 21700 < self.anzDateienErledigt and self.t21700 == None:
+         self.t21700 = datetime.datetime.now()
+         tDau = self.t21700 - self.tNow
+         sDau = self.sGetDauer( tDau)
+         minutes = int(tDau.total_seconds() / 60.0)
+         if 0 < minutes:
+            self.Info2Log(f"21700 Dateien: {sDau}, {21700/minutes} pro Minute")
+
+      if 36800 < self.anzDateienErledigt and self.t36800 == None:
+         self.t36800 = datetime.datetime.now()
+         tDau = self.t36800 - self.t21700
+         sDau = self.sGetDauer( tDau)
+         minutes = int(tDau.total_seconds() / 60.0)
+         anz = 36800 - 21700
+         if 0 < minutes:
+            self.Info2Log(f"{anz}Dateien: {sDau}, {anz/minutes} pro Minute")
+
+      if 47700 < self.anzDateienErledigt and self.t47700 == None:
+         self.t47700 = datetime.datetime.now()
+         tDau = self.t47700 - self.t36800
+         sDau = self.sGetDauer( tDau)
+         minutes = int(tDau.total_seconds() / 60.0)
+         anz = 47700 - 36800
+         if 0 < minutes:
+            self.Info2Log(f"{anz}Dateien: {sDau}, {anz/minutes} pro Minute")
 
 
 
@@ -481,10 +612,15 @@ class CBildAnalyse (CBaseApp):
             tStartAna = time.perf_counter()
 
             # Konvertierung zu RGB verhindert Fehler bei Graustufen-JPEGs
+            # Die preprocess-Funktion von CLIP (OpenAI) führt standardmäßig folgende Schritte aus: 
+            # -Resize: Skaliert die kürzere Seite des Bildes auf 224 Pixel, wobei das Seitenverhältnis erhalten bleibt.
+            # -CenterCrop: Schneidet ein quadratisches Fenster von 224x224 aus der Mitte aus.
+            # -Normalisierung: Wandelt Pixelwerte in einen Bereich um, der für Menschen nicht mehr "normal" aussieht (sehr dunkel/farbstichig), da er für die KI optimiert ist. 
             if self.bHalfPrec:
                image = self.preprocess(img.convert("RGB")).unsqueeze(0).to(self.device).half()
             else:
                image = self.preprocess(img.convert("RGB")).unsqueeze(0).to(self.device)
+
 
             with torch.no_grad():
                logits_per_image, _ = self.model(image, self.text_inputs)
@@ -515,8 +651,12 @@ class CBildAnalyse (CBaseApp):
             return True, dtExif, treffer_daten
 
 
+      except KeyboardInterrupt:
+         self.mdb.commit()
+         self.Info2Log("\nProgramm MIT STRG+C abgebrochen.")
+         self.vEndeNormal( self.Abschluss())
       except Exception as e:
-         self.Exception2Log(f'Ausnahme in AnalysiereEineDateilokal()',e)
+         self.Exception2Log(f'AnalysiereEineDateilokal()',e)
          return False, None, None
       finally:
         pass
@@ -525,7 +665,7 @@ class CBildAnalyse (CBaseApp):
    def AnalysiereEineDateiServer(self, sFsFile, sFsFileNameOnly):
       #self.Info2Log(f"AnalysiereEineDateiServer({sFsFileNameOnly})...")
       try:
-         with Image.open(sFsFile) as img:
+         with Image.open(sFsFile).convert("RGB") as img:
 
             dtExif = self.GetExifDate( img)
 
@@ -538,11 +678,17 @@ class CBildAnalyse (CBaseApp):
             #lokale Vorarbeiten: u.a.Dateigröße minimieren
             img = ImageOps.exif_transpose(img) # Korrigiert die Drehung basierend auf EXIF-Daten
 
-            #Verkleinern, LANCZOS sorgt für hohe Qualität beim Resampling
+
+            #Verkleinern, LANCZOS sorgt für hohe Qualität beim Resampling, BICUBIC ist schneller und weniger rechenintensiv
+            # ganzes Bild, leider verzerrt: img = img.resize((224, 224), Image.Resampling.LANCZOS)
+            # img = ImageOps.fit(img, (224, 224), method=Image.Resampling.LANCZOS)
+
             if self.sModell ==  self.sModell224:
-               img = img.resize((224, 224), Image.Resampling.LANCZOS)
-            elif  self.sModell ==  self.sModell236:
-               img = img.resize((336, 336), Image.Resampling.LANCZOS)
+               img = ImageOps.fit(img, (224, 224), method=Image.Resampling.LANCZOS)
+
+            elif  self.sModell ==  self.sModell336:
+                  img = ImageOps.fit(img, (336, 336), method=Image.Resampling.LANCZOS)
+
 
             img_byte_arr = io.BytesIO()# Bild in Byte-Array umwandeln
             img.save(img_byte_arr, format='JPEG')
@@ -563,8 +709,12 @@ class CBildAnalyse (CBaseApp):
                   self.Error2Log(f"Fehler in AnalysiereEineDateiServer({sFsFileNameOnly}: {self.url_base}/analyze: response.status_code: {response.status_code}")
                   return False, dtExif, None
                jret = response.json()
+            except KeyboardInterrupt:
+               self.mdb.commit()
+               self.Info2Log("\nProgramm MIT STRG+C abgebrochen.")
+               self.vEndeNormal( self.Abschluss())
             except Exception as e:
-               self.Exception2Log(f'Ausnahme in AnalysiereEineDateiServer({sFsFileNameOnly})',e)
+               self.Exception2Log(f'AnalysiereEineDateiServer({sFsFileNameOnly})',e)
 
             treffer_daten = []
             for t in range(5):
@@ -574,81 +724,15 @@ class CBildAnalyse (CBaseApp):
 
             return True, dtExif, treffer_daten
 
+      except KeyboardInterrupt:
+         self.mdb.commit()
+         self.Info2Log("\nProgramm MIT STRG+C abgebrochen.")
+         self.vEndeNormal( self.Abschluss())
       except Exception as e:
-         self.Exception2Log(f'Ausnahme in AnalysiereEineDateiServer()',e)
+         self.Exception2Log(f'AnalysiereEineDateiServer()',e)
          return False, None, None
       finally:
         pass
-
-
-   ###### DateiAnlegen(self, seqFolder, sFile, dtExif, cur) ##############################################################################
-   def DateiAnlegen(self, seqFolder, sFile, dtExif, cur):
-      try:
-         sStmt = f"SELECT NEXT VALUE FOR {self.MariaDbName}.piccat_seq_file;"
-         cur.execute( sStmt)
-         rec = cur.fetchone()
-         if rec == None:
-            self.vScriptAbbruch(f'Fehler in DateiAnlegen() / {sStmt}'  )
-         seqFile = rec[0]
-
-         sStmt = f"INSERT INTO {self.MariaDbName}.piccat_tab_file (seqFile, sName, seqFolder, seqRun, dtExif) VALUES ( ?, ?, ?, ?, ?)"
-         cur.execute( sStmt, (seqFile, sFile, seqFolder, self.iLaufNr, dtExif))
-
-         return seqFile
-
-      except Exception as e:
-         self.Error2Log(f'Datei: {sFile}'  )
-         self.Exception2Log(f'Ausnahme in DateiAnlegen()',e)
-         return -1
-      finally:
-         pass
-
-   ###### DateiLoeschen(self, seqFile, sFile, cur) ##############################################################################
-   def DateiLoeschen(self, seqFile, sFile, cur):
-      try:
-         #self.Info2Log(f"Dateien und Konfidenzen für {sFile}/{seqFile} aus der DB löschen...")
-
-         sStmt = f"delete from {self.MariaDbName}.piccat_tab_confidence where seqFile = {seqFile}"
-         cur.execute( sStmt)
-
-         sStmt = f"delete from {self.MariaDbName}.piccat_tab_file where sName = ? and sSeqRun={self.iLaufNr}"
-         cur.execute( sStmt, (sFile,))
-
-      except Exception as e:
-         self.Exception2Log(f'Ausnahme in DateiLoeschen({sFile}/{seqFile})',e)
-         return -1
-      finally:
-         pass
-
-   ###### DbDateienLesen(self, sFolder, seqFolder, cur) ##############################################################################
-   def DbDateienLesen(self, sFolder, seqFolder, cur):
-      try:
-         #self.Info2Log(f"Dateien für {sFolder} (Seq: {seqFolder})  aus der DB lesen...")
-
-         aDbFiles = {}
-
-         sStmt = f"""SELECT f.sName, f.seqFile, f.seqRun, count(c.seqFile) 
-                        FROM {self.MariaDbName}.piccat_tab_file f 
-                        LEFT join {self.MariaDbName}.piccat_tab_confidence c ON  c.seqFile = f.seqFile 
-                        WHERE f.seqFolder = ? GROUP BY f.seqFile"""
-
-         cur.execute( sStmt, (seqFolder, ))
-         rec = cur.fetchone()
-         if rec == None:
-            pass #self.Info2Log(f'Keine Dateien zu Folder gefunden in piccat_tab_file')
-         else:
-            while rec != None:
-               sName = rec[0]
-               aDbFiles[sName] = CDbFileInfo(rec[1],seqFolder,rec[2], rec[3], bDelete=False)
-               rec = cur.fetchone()
-
-         return aDbFiles
-
-      except Exception as e:
-         self.Exception2Log(f'Ausnahme in DbDateienLesen({sFolder} (Seq: {seqFolder}))',e)
-         return None
-      finally:
-         pass
 
    ###### Analysiere(self) ##############################################################################
    def Analysiere(self):
@@ -676,21 +760,27 @@ class CBildAnalyse (CBaseApp):
             anzFsFiles = len(fsFiles)
             #self.Info2Log(f"{anzFsFiles} Dateien aus {sFolder} ...")
 
-            aDbFiles = self.DbDateienLesen( sFolder, folderinfoDb.seqFolder, cur) # aus DB lesen
-            if aDbFiles != None:
-               for sDbFile, fiDb in aDbFiles.items():
-                  bDelete = True if fsFiles.get(f"{sFolder}\\{sDbFile}") is None else False
-                  if bDelete:
-                     self.DateiLoeschen( fiDb.seqFile, sDbFile, cur)
+            if self.bVervollstaendigen:
+               aDbFiles = self.DbDateienLesen( sFolder, folderinfoDb.seqFolder, cur) # aus DB lesen
+               if aDbFiles != None:
+                  for sDbFile, fiDb in aDbFiles.items():
+                     bDelete = True if fsFiles.get(f"{sFolder}\\{sDbFile}") is None else False
+                     if bDelete:
+                        self.DateiLoeschen( fiDb.seqFile, sDbFile, cur)
 
-            # Dateien analysieren und Ergebnisse speichern, aber nur die, die noch keine Konfidenz haben:
-            for sFsFile, sFsFileNameOnly in fsFiles.items():
-               fileinfoDb = aDbFiles.get(sFsFileNameOnly)
-               if fileinfoDb != None:
-                  if fileinfoDb.iConfi > 0:
-                     continue
+            fileinfoDb = None
 
-               pbar.set_postfix(file=sFsFileNameOnly)
+            for sFsFile, sFsFileNameOnly in fsFiles.items():  #Hauptschleife
+
+               if self.bVervollstaendigen:
+                  fileinfoDb = aDbFiles.get(sFsFileNameOnly)
+                  if fileinfoDb != None:
+                     if fileinfoDb.iConfi > 0:
+                        self.anzDateienVorhanden += 1
+                        continue  # diese Datei hat bereits Konfidenz-Sätze
+                  
+               if self.anzDateienErledigt % 10 == 0:
+                  pbar.set_postfix(file=sFsFileNameOnly)
 
                if self.bSend2Server:
                   ret, dtExif, treffer_daten = self.AnalysiereEineDateiServer(sFsFile, sFsFileNameOnly)
@@ -703,9 +793,10 @@ class CBildAnalyse (CBaseApp):
                if fileinfoDb == None:
                   seqFile = self.DateiAnlegen( folderinfoDb.seqFolder, sFsFileNameOnly, dtExif, cur)
                else:
-                  seqFile = fiDb.seqFile
+                  seqFile = fileinfoDb.seqFile
 
                if seqFile == -1:
+                  self.anzDateienFehler += 1
                   continue
 
                sKonfi = ""
@@ -723,13 +814,20 @@ class CBildAnalyse (CBaseApp):
                         sKonfi += f"{catinfo.sUserText}: {iKonfi}"
 
                if fileCsv != None:
-                  sLine = f"{sFsFile}, {sExif}"
+                  sLine = f"{sFsFile}, {dtExif}"
                   if len(sKonfi) > 0:
                      sLine += f", {sKonfi}"
                   fileCsv.write(f"{sLine}\n")
 
-               pbar.update(1)
                self.anzDateienErledigt +=1
+
+               # kann nur increment: pbar.update(10) 
+               pbar.n = self.anzDateienVorhanden + self.anzDateienFehler + self.anzDateienErledigt
+               if pbar.n % 10 == 0:
+                  pbar.refresh()   
+
+               self.NimmZwischenzeit()
+
                if self.iDateienMaximal < self.anzDateienErledigt:
                   break
 
@@ -744,8 +842,12 @@ class CBildAnalyse (CBaseApp):
 
          #self.Info2Log(f"Erledigt. Verzeichnisse: ({self.anzErlFolder}/{anzFolder}), *.jp*-Dateien:  {self.anzDateienErledigt}/{self.iAllFiles}")
          
+      except KeyboardInterrupt:
+         self.mdb.commit()
+         self.Info2Log("\nProgramm MIT STRG+C abgebrochen.")
+         self.vEndeNormal( self.Abschluss())
       except Exception as e:
-         self.Exception2Log(f'Ausnahme in Analysiere()',e)
+         self.Exception2Log(f'Analysiere()',e)
       finally:
         pbar.close()
         cur.close()
@@ -763,10 +865,14 @@ class CBildAnalyse (CBaseApp):
          self.EinstellungenInsLog()
          self.ErgebnisseInsLog()
 
-         return f"Bildanalyse erfolgreich."
+         if self.bFehlerpruefen:
+            print(f"Es sind Fehler aufgetreten. Bitte das Log prüfen.")
+            return f"Bildanalyse mit Fehlern."
+
+         return f"\nDetails zur Bildanalyse siehe Log."
 
       except Exception as e:
-         self.Exception2Log(f'Ausnahme in Abschluss()',e)
+         self.Exception2Log(f'Abschluss()',e)
          return ""
       finally:
         cur.close()
@@ -790,12 +896,12 @@ class CBildAnalyse (CBaseApp):
 
       try:
          resp = self.session.post(f"{self.url_base}/init_brain", json=cl, timeout=20)
-         self.Info2Log("{self.url_base}/init_brain:", resp.json())
+         self.Info2Log(f"{self.url_base}/init_brain: {resp.json()}")
          if resp.status_code != 200:
             self.vScriptAbbruch(f"Fehler in init_brain_on_ryzen(): {self.url_base}/init_brain liefert resp.status_code {resp.status_code}")
 
       except Exception as e:
-         self.Exception2Log(f'Ausnahme in init_brain_on_ryzen()',e)
+         self.Exception2Log(f'init_brain_on_ryzen()',e)
          return False
 
 
@@ -838,13 +944,22 @@ def main(argv):
 
       ba.vEndeNormal( ba.Abschluss())
 
+
+   except KeyboardInterrupt:
+     ba.mdb.commit()
+     ba.Info2Log("\nProgramm MIT STRG+C abgebrochen.")
+     ba.vEndeNormal( ba.Abschluss())
    except Exception as e:
-      ba.Exception2Log(f'Ausnahme in main()',e)
+      ba.Exception2Log(f'main()',e)
       ba.vScriptAbbruch(f'Bildanalyse unvollständig oder abgebrochen.')
    finally:
       pass
 
 if __name__ == "__main__":
     main(sys.argv)
+
+# offen: Verzeichnisse ohne jp* wieder löschen oder gar nicht erst einfügen in die DB
+# im Server sind auch noch zwei Punkte offen, siehe #$$
+
 
 
