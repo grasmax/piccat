@@ -10,38 +10,48 @@
 
 ##Client-Struktur
 ```mermaid
-graph TD
-    subgraph Stufe_1 [Stufe 1: Discovery]
-        HT[Haupt-Thread] -- "Pfade" --> Q1((Queue 1))
+flowchart TD
+    subgraph Stufe_1 [Verzeichnisse finden]
+        HT[Haupt-Thread] -- "Verzeichnis" --> Q1((Queue 1))
     end
 
-    subgraph Stufe_2 [Stufe 2: Batching]
+    subgraph Stufe_2 [Bilder lesen und stauchen]
         Q1 --> P1[Producer 1]
         Q1 --> P2[Producer 2]
-        P1 & P2 -- "16er Batches" --> Q2((Queue 2))
+        P1 & P2 -- "16er Bild-Bündel" --> Q2((Queue 2))
     end
 
-    subgraph Stufe_3 [Stufe 3: Network I/O]
+    subgraph Stufe_3 [Datenverteilung]
         Q2 --> S1[Sender 1]
         Q2 --> S2[Sender 2]
         Q2 --> S3[Sender 3]
         Q2 --> S4[Sender 4]
     end
 
-    subgraph Stufe_4 [Stufe 4: Analyse]
-      S1 & S2 & S3 & S4 <--> Server((FastAPI Server))
+    %% Der Trick für echtes Nebeneinander: Ein Container mit LR
+    subgraph Stufe_4_5 [Analyse und Speicherung]
+        direction LR
+        S4_Analyse[Stufe 4: Analysieren] ~~~ S5_Speicherung[Stufe 5: Speichern]
+        
+        subgraph S4_Analyse [Stufe 4: Analysieren]
+            Server[FastAPI/UviCorn/Torch/Clip]
+        end
+        
+        subgraph S5_Speicherung [Stufe 5: Speichern]
+            DB[(MariaDB)]
+        end
     end
 
-    subgraph Stufe_5 [Stufe 5: Storage]
-      S1 & S2 & S3 & S4 --> DB[(MariaDB)]
-    end
+    %% Verbindungen zu den Subgraphs (stabilisiert das Layout)
+    S1 & S2 & S3 & S4 --> S4_Analyse
+    S1 & S2 & S3 & S4 --> S5_Speicherung
 
-    %% Styling
+    %% Styling nur für existierende IDs
     style Q1 fill:#f9f
-    style Q2 fill:#f96,stroke-width:2px
+    style Q2 fill:#f96
     style DB fill:#55f,color:#fff
     style Server fill:#5f5
-
+    style Stufe_4_5 fill:none,stroke:none
 ```
 
 
