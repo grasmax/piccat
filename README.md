@@ -1,4 +1,5 @@
-# piccat – Bildanalyse mit torch/clip an Hand von Kategorien
+# piccat – Bildanalyse an Hand von Kategorien mit KI (torch/clip) 
+Ziel ist, an Hand fest definierter Kategorien Bilder in einem großen Datenbestand zu finden und in einem Bildbetrachter anzuzeigen.
 
 ## Danksagungen
 Groß Teile der Code-Architektur, der Client-Server-Schnittstelle, Performance-Optimierungen, Fehlerbehandlung und der Bildbetrachter wurden mit der Hilfe von Google Gemini entwickelt. 
@@ -10,15 +11,17 @@ Groß Teile der Code-Architektur, der Client-Server-Schnittstelle, Performance-O
 - ca. 90000 Dateien,  182.977 Konfidenzsätze
 
 ## Evolution
+**Lokale Analyse:**
 - [createdb.sql](https://github.com/grasmax/piccat/blob/main/createdb.sql) ... Datenbank-Schema für Kategorien, Dateien und Analyse-Ergebnisse, Schema-Bild s.u,
 - [piccat_csv.py](https://github.com/grasmax/piccat/blob/main/piccat_csv.py) ... lokale Analyse, Ergebnis in CSV-Datei
 - [piccat_db.py](https://github.com/grasmax/piccat/blob/main/piccat_db.py) ... lokale Analyse, Ergebnis in MariaDB, **Dauer 2,4 Sekunden pro Bild: 60 Stunden**
-
   
-- [piccat_server.py](https://github.com/grasmax/piccat/blob/main/piccat_server.py) ... Analyse in Server ausgelagert
+**Analyse auf einem Server:**
+- [piccat_server.py](https://github.com/grasmax/piccat/blob/main/piccat_server.py) ... Analyse in Server ausgelagert, 1 Bild pro Serverruf
 - [piccat_client.py](https://github.com/grasmax/piccat/blob/main/piccat_client.py) ... Dateiarbeit, Server calls und Speicherung der Ergebnisse in MariaDb, **Dauer 5,5 Stunden**
-
-- [piccat_client_x2x4x16.py](https://github.com/grasmax/piccat/blob/main/piccat_client_x2x4x16.py) ... Client: Hauptthread und 6 Helfer-Threads
+  
+**Optimierte Analyse mit 2 Warteschlangen und 6 Programmfäden im Client und vier Analyseprozessen im Server:**
+- [piccat_client_x2x4x16.py](https://github.com/grasmax/piccat/blob/main/piccat_client_x2x4x16.py) ... Client: Hauptthread und 6 Helfer-Threads, 16 Bilder pro Serverruf
 - [piccat_server_x16.py](https://github.com/grasmax/piccat/blob/main/piccat_server_x16.py) ... Server: 4 Analyse-Prozesse, **Dauer 1,5 Stunden**
   
 - [piccat_viewer_tki.py](https://github.com/grasmax/piccat/blob/main/piccat_viewer_tki.py) ... Anzeige der Ergebnisse
@@ -132,7 +135,7 @@ erDiagram
     PICCAT_TAB_FOLDER {
         int seqFolder PK "seq_folder"
         varchar_500 sName "Pfad"
-        int seqRun FK "Lauf-Referenz"
+        int seqRun FK "Lauf-ID"
     }
 
     PICCAT_TAB_FILE {
