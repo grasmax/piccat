@@ -22,7 +22,7 @@ Groß Teile der Code-Architektur, der Client-Server-Schnittstelle, Performance-O
   
 **Optimierte Analyse mit 2 Warteschlangen und 6 Programmfäden im Client und vier Analyseprozessen im Server:**
 - [piccat_client_x2x4x16.py](https://github.com/grasmax/piccat/blob/main/piccat_client_x2x4x16.py) ... Client: Hauptthread und 6 Helfer-Threads, 16 Bilder pro Serverruf
-- [piccat_server_x16.py](https://github.com/grasmax/piccat/blob/main/piccat_server_x16.py) ... Server: 4 Analyse-Prozesse, **Dauer 1,5 Stunden**
+- [piccat_server_x16.py](https://github.com/grasmax/piccat/blob/main/piccat_server_x16.py) ... Server: 4 Analyse-Prozesse, **Dauer 1,75 Stunden**
   
 - [piccat_viewer_tki.py](https://github.com/grasmax/piccat/blob/main/piccat_viewer_tki.py) ... Anzeige der Ergebnisse
 
@@ -122,7 +122,7 @@ KI-Antworten können Fehler enthalten. Weitere Informationen
 git clone https://github.com && cd piccat && python3 -m venv venv && source venv/bin/activate && pip install --upgrade pip && pip install pillow requests fastapi uvicorn python-multipart torch torchvision clip-by-openai
 
 
-## Datenbank-Schema
+## Datenbank-Schema für die Speicherung der Ergebnisse
 ```mermaid
 erDiagram
     PICCAT_TAB_RUN ||--o{ PICCAT_TAB_FOLDER : "verknuepft"
