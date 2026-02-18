@@ -18,11 +18,12 @@ Groß Teile der Code-Architektur, der Client-Server-Schnittstelle, Performance-O
 - [piccat_server.py](https://github.com/grasmax/piccat/blob/main/piccat_server.py) ... Analyse in Server ausgelagert
 - [piccat_client.py](https://github.com/grasmax/piccat/blob/main/piccat_client.py) ... Dateiarbeit, Server calls und Speicherung der Ergebnisse in MariaDb, **Dauer 5,5 Stunden**
 
+- [piccat_client_x2x4x16.py](https://github.com/grasmax/piccat/blob/main/piccat_client_x2x4x16.py) ... Client: Hauptthread und 6 Helfer-Threads
+- [piccat_server_x16.py](https://github.com/grasmax/piccat/blob/main/piccat_server_x16.py) ... Server: 4 Analyse-Prozesse, **Dauer 1,5 Stunden**
   
 - [piccat_viewer_tki.py](https://github.com/grasmax/piccat/blob/main/piccat_viewer_tki.py) ... Anzeige der Ergebnisse
 
 ## Client-Struktur
-
 ```mermaid
 flowchart TD
     subgraph Stufe_1 [Verzeichnisse finden]
