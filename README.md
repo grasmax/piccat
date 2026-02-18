@@ -114,6 +114,49 @@ git clone https://github.com && cd piccat && python3 -m venv venv && source venv
 
 
 ## Datenbank-Schema
+```mermaid
+erDiagram
+    PICCAT_TAB_RUN ||--o{ PICCAT_TAB_FOLDER : "verknuepft"
+    PICCAT_TAB_RUN ||--o{ PICCAT_TAB_FILE : "beinhaltet"
+    PICCAT_TAB_RUN ||--o{ PICCAT_TAB_CONFIDENCE : "historisiert"
+    PICCAT_TAB_FOLDER ||--o{ PICCAT_TAB_FILE : "gruppiert"
+    PICCAT_TAB_FILE ||--o{ PICCAT_TAB_CONFIDENCE : "besitzt"
+    PICCAT_TAB_CATEGORY ||--o{ PICCAT_TAB_CONFIDENCE : "definiert"
+
+    PICCAT_TAB_RUN {
+        int seqRun PK "seq_run"
+        datetime tBeg "Beginn"
+        datetime tEnd "Ende"
+    }
+
+    PICCAT_TAB_FOLDER {
+        int seqFolder PK "seq_folder"
+        varchar_500 sName "Pfad"
+        int seqRun FK "Lauf-Referenz"
+    }
+
+    PICCAT_TAB_FILE {
+        int seqFile PK "seq_file"
+        varchar_100 sName "Dateiname"
+        int seqFolder FK "Ordner-ID"
+        int seqRun FK "Lauf-ID"
+        datetime dtExif "Aufnahmedatum"
+    }
+
+    PICCAT_TAB_CATEGORY {
+        int seqCat PK "seq_category"
+        varchar_100 sAiText "Engl. AI-Begriff"
+        varchar_100 sUserText "Anzeige-Text"
+    }
+
+    PICCAT_TAB_CONFIDENCE {
+        int seqFile PK, FK "Bild-ID"
+        int seqCategory PK, FK "Kat-ID"
+        int seqRun FK "Lauf-ID"
+        int seqFolder FK "Ordner-ID"
+        int iConfidence "Wahrscheinlichkeit %"
+    }
+```
 
 
 
