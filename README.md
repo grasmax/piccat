@@ -8,6 +8,53 @@
 - [piccat_client.py](https://github.com/grasmax/piccat/blob/main/piccat_client.py) ... Dateiarbeit, Server calls und Speicherung der Ergebnisse in MariaDb
 - [piccat_viewer_tki.py](https://github.com/grasmax/piccat/blob/main/piccat_viewer_tki.py) ... Anzeige der Ergebnisse
 
+##Client-Struktur
+```mermaid
+flowchart TD
+    subgraph Stufe_1 [Verzeichnisse finden]
+        HT[Haupt-Thread] -- "Verzeichnis" --> Q1((Queue 1))
+    end
+
+    subgraph Stufe_2 [Bilder lesen und stauchen]
+        Q1 --> P1[Producer 1]
+        Q1 --> P2[Producer 2]
+        P1 & P2 -- "16er Bild-Bündel" --> Q2((Queue 2))
+    end
+
+    subgraph Stufe_3 [Datenverteilung]
+        Q2 --> S1[Sender 1]
+        Q2 --> S2[Sender 2]
+        Q2 --> S3[Sender 3]
+        Q2 --> S4[Sender 4]
+    end
+
+    %% Der Trick für echtes Nebeneinander: Ein Container mit LR
+    subgraph Stufe_4_5 [Analyse und Speicherung]
+        direction LR
+        S4_Analyse[Stufe 4: Analysieren] ~~~ S5_Speicherung[Stufe 5: Speichern]
+        
+        subgraph S4_Analyse [Stufe 4: Analysieren]
+            Server[FastAPI/UviCorn/Torch/Clip]
+        end
+        
+        subgraph S5_Speicherung [Stufe 5: Speichern]
+            DB[(MariaDB)]
+        end
+    end
+
+    %% Verbindungen zu den Subgraphs (stabilisiert das Layout)
+    S1 & S2 & S3 & S4 --> S4_Analyse
+    S1 & S2 & S3 & S4 --> S5_Speicherung
+
+    %% Styling nur für existierende IDs
+    style Q1 fill:#f9f
+    style Q2 fill:#f96
+    style DB fill:#55f,color:#fff
+    style Server fill:#5f5
+    style Stufe_4_5 fill:none,stroke:none
+```
+
+
 ## Beschreibung
 Effiziente Bildklassifizierung mit Lastverteilung zwischen I7-7500-Worker und Ryzen r7800x3d-Brain über eine leichtgewichtige FastAPI-Schnittstelle.
 Architektur
