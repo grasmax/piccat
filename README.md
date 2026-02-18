@@ -26,6 +26,12 @@ Groß Teile der Code-Architektur, der Client-Server-Schnittstelle, Performance-O
   
 - [piccat_viewer_tki.py](https://github.com/grasmax/piccat/blob/main/piccat_viewer_tki.py) ... Anzeige der Ergebnisse
 
+**Warum es immer schneller wurde:**
+1. Offloading (Der Ryzen-Effekt): Dass die schwere KI-Rechenlast (ViT-B/32) auf dem potenten Ryzen-Server läuft und der Laptop nur noch die Bilder „reicht“, ist der größte Hebel.
+2. Parallelisierung (Die 4 Ports): Die 4 parallelen Ports sorgen dafür, dass die GPU auf dem Ryzen niemals auf Daten warten muss. Wenn ein Port gerade im Netzwerk-Handshake hängt, liefert der nächste schon Daten.
+3. Batching (16er Pakete): Statt 90.000-mal den Server zu rufen, findet es nur noch ca. 5.600-mal statt. Das reduziert den Overhead massiv.
+4. Asynchronität (Ebene 2 + 3): Während Ebene 3 noch auf die Antwort vom Server wartet, hat Ebene 2 schon die nächsten 16 Bilder im RAM geschrumpft. Die Pipeline ist immer gefüllt.
+
 ## Client-Struktur
 ```mermaid
 flowchart TD
