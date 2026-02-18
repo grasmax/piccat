@@ -1,14 +1,28 @@
 # piccat – Bildanalyse mit torch/clip an Hand von Kategorien
 
+## Danksagungen
+Groß Teile der Code-Architektur, der Client-Server-Schnittstelle, Performance-Optimierungen, Fehlerbehandlung und der Bildbetrachter wurden mit der Hilfe von Google Gemini entwickelt. 
+
+## Getestet mit
+- Lenovo E570 mit I7-7500 / Windows 10 Prof / MariaDB / tkinter viewer
+- Asus mit Ryzen r7 7800x3d und rtx5060 ti / Windows 11 Prof / torch + clip
+- Lenovo <--> fastapi <--> Asus
+- ca. 90000 Dateien,  182.977 Konfidenzsätze
+
 ## Evolution
+- [createdb.sql](https://github.com/grasmax/piccat/blob/main/createdb.sql) ... Datenbank-Schema für Kategorien, Dateien und Analyse-Ergebnisse, Schema-Bild s.u,
 - [piccat_csv.py](https://github.com/grasmax/piccat/blob/main/piccat_csv.py) ... lokale Analyse, Ergebnis in CSV-Datei
-- [piccat_db.py](https://github.com/grasmax/piccat/blob/main/piccat_db.py) ... lokale Analyse, Ergebnis in MariaDB
-- [createdb.sql](https://github.com/grasmax/piccat/blob/main/createdb.sql) ... Datenbank-Schema für Kategorien, Dateien und Analyse-Ergebnisse
+- [piccat_db.py](https://github.com/grasmax/piccat/blob/main/piccat_db.py) ... lokale Analyse, Ergebnis in MariaDB, **Dauer 2,4 Sekunden pro Bild: 60 Stunden**
+
+  
 - [piccat_server.py](https://github.com/grasmax/piccat/blob/main/piccat_server.py) ... Analyse in Server ausgelagert
-- [piccat_client.py](https://github.com/grasmax/piccat/blob/main/piccat_client.py) ... Dateiarbeit, Server calls und Speicherung der Ergebnisse in MariaDb
+- [piccat_client.py](https://github.com/grasmax/piccat/blob/main/piccat_client.py) ... Dateiarbeit, Server calls und Speicherung der Ergebnisse in MariaDb, **Dauer 5,5 Stunden**
+
+  
 - [piccat_viewer_tki.py](https://github.com/grasmax/piccat/blob/main/piccat_viewer_tki.py) ... Anzeige der Ergebnisse
 
-##Client-Struktur
+## Client-Struktur
+
 ```mermaid
 flowchart TD
     subgraph Stufe_1 [Verzeichnisse finden]
@@ -97,16 +111,8 @@ KI-Antworten können Fehler enthalten. Weitere Informationen
 ### Client-Server-Schnittstelle
 git clone https://github.com && cd piccat && python3 -m venv venv && source venv/bin/activate && pip install --upgrade pip && pip install pillow requests fastapi uvicorn python-multipart torch torchvision clip-by-openai
 
-## Getestet mit
-- Lenovo E570 mit I7-7500 / Windows 10 Prof / MariaDB / tkinter viewer
-- Asus mit Ryzen r7 7800x3d und rtx5060 ti / Windows 11 Prof / torch + clip
-- Lenovo <--> fastapi <--> Asus
-- ca. 90000 Dateien,  182.977 Konfidenzsätze
-- Dauer ca 5h30
 
-## Acknowledgements
-Parts of the code architecture, database optimization, viewer and error handling 
-were developed with the assistance of Google Gemini.
+## Datenbank-Schema
 
 
 
