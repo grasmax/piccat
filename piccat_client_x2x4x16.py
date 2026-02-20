@@ -442,11 +442,15 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
         
          # 2. Prüfen, ob im aktuellen Verzeichnis jpeg/jpg Dateien liegen
          # case-insensitive Prüfung (.JPG, .jpeg etc.)
-         hat_bilder = any(f.lower().endswith(('.jpg', '.jpeg')) for f in files)
-        
-         if hat_bilder:
+         # hat_bilder = any(f.lower().endswith(('.jpg', '.jpeg')) for f in files)
+         # if hat_bilder:
+
+         anzahl_bilder = sum(1 for f in files if f.lower().endswith(('.jpg', '.jpeg')))
+         if 0 < anzahl_bilder:
             ergebnis_liste[root] = os.path.basename(root)
-            
+            self.iAllFiles += anzahl_bilder
+            print(f"\r Dateien: {self.iAllFiles}  ", end="", flush=True)
+
       return ergebnis_liste
 
 
@@ -712,6 +716,8 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
             payload = {'lfdNr': atd.anzDateienErledigt+1} # seqFile hier noch nicht bekannt
                
             for ad in ad16.listBilder:
+               if ad is None:
+                  continue
                files.append(('listImages', (ad.sFsFileNameOnly, ad.img_byte_arr, 'image/jpeg')))
                dictBilder[ad.sFsFileNameOnly] = CBildDaten(ad.seqFolder, ad.sFsFileNameOnly, ad.dtExif)
             self.queueBilder.task_done()
@@ -781,8 +787,12 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
          self.Exception2Log(f'AnalysierenSpeichernThread()',e)
       finally:
          self.ThreadData2AppAData( atd)
-         cur.close()
-         mariaDb.close()
+
+         if 'cur' in locals(): 
+            cur.close()
+         if 'mariaDb' in locals(): 
+            mariaDb.commit()
+            mariaDb.close()
 
          print(f"Ende AnalysierenSpeichernThread(Port: {atd.port}), erledigt: {self.anzDateienErledigt}\n", end="")
 
@@ -876,6 +886,9 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
                         continue  # diese Datei hat bereits Konfidenz-Sätze
                   
                ad, dauSchrumpf = self.SchrumpfeEineDatei(qfi.seqFolder, sFsFile, sFsFileNameOnly)
+               if ad == None:
+                  self.Error2Log(f"Bild übersprungen (defekt): {sFsFileNameOnly}")
+                  continue
                a16.listBilder.append( ad)
                dauSchrumpfAlle += dauSchrumpf
 
@@ -892,9 +905,12 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
          self.Exception2Log(f'FolderThread()',e)
       finally:
          tStartCommit = time.perf_counter()
-         mariaDb.commit()
-         cur.close()
-         mariaDb.close()
+
+         if 'cur' in locals(): 
+            cur.close()
+         if 'mariaDb' in locals(): 
+            mariaDb.commit()
+            mariaDb.close()
 
          self.FolderThreadData2AppData( anzFolder, time.perf_counter() - tStartCommit)
          print(f"Ende FolderThread(), erledigt: {anzFolder}\n", end="")
@@ -989,6 +1005,9 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
 ###### CBildAnalyse } ##############################################################################
 
 def main(argv):
+
+   monitor = None
+
    try:
       ba = CBildAnalyse()                # u.a. die Konfigdatei lesen 
 
@@ -1012,8 +1031,8 @@ def main(argv):
 
       ba.AktualisiereVerzeichnisse()    # nicht mehr vorhandene Verzeichnisse aus DB löschen und neue einfügen, alle mit aktueller Nummer speichern
                                         # die Verzeichnisse auch gleich in die QueueFolder stellen
-      ba.ErmittleDateiAnzahl()
-
+      # ba.ErmittleDateiAnzahl() schon in ba.AktualisiereVerzeichnisse() erledigt
+              
       ba.init_brain_on_ryzen()   # für Bildanalyse-Server initialisieren, Dateianzahl mitgeben
 
       # ba.pbar = tqdm(total=ba.iAllFiles, desc="Bild-Analyse", leave=True)
@@ -1046,9 +1065,34 @@ def main(argv):
 
 
    except KeyboardInterrupt:
-     ba.mdb.commit()
-     ba.Info2Log("\nProgramm mit STRG+C abgebrochen.")
-     ba.vEndeNormal( ba.Abschluss())
+      ba.mdb.commit()
+      ba.Info2Log("\nProgramm mit STRG+C abgebrochen.")
+
+    
+      # 1. Die Queue leeren (optional, aber beschleunigt den Abbruch)
+      try:
+         while True:
+            ba.queueFolder.get_nowait()
+            ba.queueFolder.task_done()
+         while True:
+            ba.queueBilder.get_nowait()
+            ba.queueBilder.task_done()
+      except queue.Empty:
+         pass
+
+      # 2. Jedem Thread ein "None" schicken
+      for _ in range(len(ba.threadsEbene2)):
+         ba.queueFolder.put(None)
+      for _ in range(len(ba.threadsEbene3)):
+         ba.queueBilder.put(None)
+
+      # 3. Jetzt erst in die Überwachungs-Schleife
+      while any(t.is_alive() for t, atd in ba.threadsEbene3):
+         aktueller_stand = sum(atd.anzDateienErledigt for t,atd in ba.threadsEbene3)# Summe bilden (Sicher ohne Lock)
+      monitor.update_display(aktueller_stand)
+
+      ba.vEndeNormal( ba.Abschluss())
+
    except Exception as e:
       ba.Exception2Log(f'main()',e)
       ba.vScriptAbbruch(f'Bildanalyse unvollständig oder abgebrochen.')
