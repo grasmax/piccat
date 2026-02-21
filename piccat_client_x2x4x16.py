@@ -165,6 +165,115 @@ class CAnaData16:
     def __repr__(self):
         return f"CAnaData16(Anzahl in self.listBilder='{len(self.listBilder)}')"
 
+#################################################################################################################################
+# Bei den Tests im Februar 2026 hat sich herausgestellt, dass das Allokieren von 90000 Byte-Arrays für die Bilder zu lange dauert
+# Der RAM-Bedarf sprang im Sekundentakt zwischen 60 und 160MB.
+# Abhilfe sollte mit global definierten, wiederverwedneten Speicherbereichen geschaffen werden
+# Gemini hat vorgeschlagen, dies queue-basiert zu realisieren
+# Container für das 16er-Bilddatenbündel, die über die QueueBilder an den Analyse-Thread übergeben werden  ######################
+
+IMAGEBUFFSIZE = 33450
+
+class CBildContainer:
+   def __init__(self):
+      # so fkt es nicht:
+      # self.ImageBuffSize = IMAGEBUFFSIZE
+      # self.raw_buffer = bytearray(self.ImageBuffSize)
+      # self.bio = io.BytesIO(self.raw_buffer)
+      # self.view = self.bio.getbuffer()# memoryview für schnelles "Nullen" ohne Kopien
+      
+      # google sagt, ein so angelegtes byte-Array bleit mit
+      # bun.listBilder[i].bio.seek(0)          # Zeiger zurücksetzen - der Speicher von 'bio' wird wiederverwendet!
+      # bun.listBilder[i].bio.truncate(0)       # Den alten Inhalt logisch löschen, ohne den RAM freizugeben
+      # erhalten:
+      self.bio = io.BytesIO() 
+
+      self.sFsFileNameOnly = ""
+      self.seqFolder = ""
+      self.dtExif = None
+
+
+   ###### BildHinzufuegen(self, seqFolder, sFsFile, sFsFileNameOnly, sizePic, app) ##############################################################################
+   def BildHinzufuegen(self, seqFolder, sFsFile, sFsFileNameOnly, sizePic, app):
+      #self.Info2Log(f"BildHinzufuegen({sFsFileNameOnly})...")
+      try:
+         self.sFsFileNameOnly = sFsFileNameOnly
+         self.seqFolder = seqFolder
+
+         with Image.open(sFsFile).convert("RGB") as img:
+
+            self.dtExif = app.GetExifDate( img)
+
+            tStartPrepare = time.perf_counter()
+
+            img = ImageOps.exif_transpose(img) # Korrigiert die Drehung basierend auf EXIF-Daten
+
+            #Verkleinern, LANCZOS sorgt für hohe Qualität beim Resampling, BICUBIC ist schneller und weniger rechenintensiv
+            # ganzes Bild, leider verzerrt: img = img.resize((224, 224), Image.Resampling.LANCZOS)
+            # img = ImageOps.fit(img, (224, 224), method=Image.Resampling.LANCZOS)
+            img = ImageOps.fit(img, sizePic, method=Image.Resampling.LANCZOS)
+
+            self.bio.seek(0)          # Zeiger zurücksetzen - der Speicher von 'bio' wird wiederverwendet!
+            self.bio.truncate(0)       # Den alten Inhalt logisch löschen, ohne den RAM freizugeben
+            img.save(self.bio, format='JPEG')      
+
+            dPrepareSumSec = ZeitmessungEinfach(tStartPrepare, 0.0)
+
+            return True, dPrepareSumSec, None
+
+        
+      except Exception as e:
+         return False, 0.0, e
+      finally:
+         pass
+
+
+
+   def Reset(self):
+      try:
+         #so fkt es nicht:
+         #view = self.bio.getbuffer()# memoryview für schnelles "Nullen" ohne Kopien
+         #view[:] = b'\x00' * IMAGEBUFFSIZE # Den Puffer effizient mit Nullen überschreiben (Zero-Copy)
+         #aber so:
+         self.bio.seek(0) # Den Zeiger auf den Anfang zurücksetzen
+         self.bio.truncate(0) # Den alten Inhalt logisch löschen, ohne den RAM freizugeben
+
+         self.sFsFileNameOnly = ""
+         self.seqFolder = ""
+         self.dtExif = None
+      except Exception as e:
+         print(f'main()',e)
+
+class CBildContainerX16:
+   def __init__(self, pool):
+      self.pool = pool
+      self.listBilder = []
+      for _ in range(16):
+         self.listBilder.append(CBildContainer()) 
+
+   def release(self):
+      for bc in self.listBilder:
+         bc.Reset()
+      self.pool.return_bundle(self)
+
+class CBildContainerX16Pool:
+    def __init__(self):
+       anz = 8
+       self.pool = queue.Queue(maxsize=anz)
+       for _ in range(anz ):
+          self.pool.put( CBildContainerX16(self))
+
+    def get_bundle(self):
+        return self.pool.get() # Blockiert, wenn alle 8 Bündel unterwegs sind
+
+    def return_bundle(self, bundle):
+        self.pool.put(bundle)
+
+
+
+
+
+
 
 
 ###### class CAnaThreadData: ##############################################################################
@@ -237,6 +346,8 @@ class CBildAnalyse (CBaseApp):
          self.sModell224 =  self.Settings['Bildanalyse']['Modelle']['Modell224']
          self.sModell336  =  self.Settings['Bildanalyse']['Modelle']['Modell336']
          self.bAna = True if self.sModell == self.sModell224 or self.sModell == self.sModell336 else False
+         self.ImageBuffSize = 33450 if self.sModell == self.sModell336 else 15980
+
 
          self.bHalfPrec = True if self.Settings['Bildanalyse']['HalfPrecision'] == 'True' else False
 
@@ -261,6 +372,8 @@ class CBildAnalyse (CBaseApp):
 
          self.queueFolder = None
          self.threadsEbene2 = []
+
+         self.bcp = CBildContainerX16Pool() # zur Vermeidung zeitaufwendiger alloc/free für die Bytearrays
          self.queueBilder = queue.Queue(maxsize=500) 
          self.threadsEbene3 = []
 
@@ -682,11 +795,12 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
          self.dMariaInsertSumSec += atd.dMariaInsertSumSec
          self.dMariaCommitSumSec += atd.dMariaCommitSumSec
 
-   ###### FolderThreadData2AppData(self, anzFolder, dMariaCommitSumSec) ##############################################################################
-   def FolderThreadData2AppData(self, anzFolder, dMariaCommitSumSec):
+   ###### FolderThreadData2AppData(self, anzFolder, dMariaCommitSumSec, dauSchrumpfAlle) ##############################################################################
+   def FolderThreadData2AppData(self, anzFolder, dMariaCommitSumSec, dauSchrumpfAlle):
       with self.stats_lock:
          self.anzErlFolder += anzFolder
          self.dMariaCommitSumSec += dMariaCommitSumSec
+         self.dPrepareSumSec += dauSchrumpfAlle
 
 
    ###### AnalysierenSpeichernThread(self, pbar, atd) ##############################################################################
@@ -706,22 +820,26 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
 
          while True:
             try:
-               ad16 =  self.queueBilder.get(timeout=30) # 16er Bündel abholen, Timeout von 3 auf 30 Sekunden erhöht, damit sich die Threads nicht gleich beenden, wenn die Ebene 2 noch nichts gelifert hat
+               bun16 =  self.queueBilder.get(timeout=30) # 16er Bündel abholen, Timeout von 3 auf 30 Sekunden erhöht, damit sich die Threads nicht gleich beenden, wenn die Ebene 2 noch nichts gelifert hat
             except queue.Empty:
                break # keine weiteren Bilder --> abbrechen
 
-            if ad16 is None:
+            if bun16 is None:
                break # Beenden-Signal --> abbrechen
 
             payload = {'lfdNr': atd.anzDateienErledigt+1} # seqFile hier noch nicht bekannt
                
-            for ad in ad16.listBilder:
+            for ad in bun16.listBilder:
                if ad is None:
                   continue
-               files.append(('listImages', (ad.sFsFileNameOnly, ad.img_byte_arr, 'image/jpeg')))
+               files.append(('listImages', (ad.sFsFileNameOnly, ad.bio.getbuffer(), 'image/jpeg')))
                dictBilder[ad.sFsFileNameOnly] = CBildDaten(ad.seqFolder, ad.sFsFileNameOnly, ad.dtExif)
+            
             self.queueBilder.task_done()
             #print(f"task_done()(Port: {atd.port})")
+
+            bun16.release()
+
 
             # ... und an den Server senden
             tStartAna = time.perf_counter()
@@ -798,51 +916,9 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
 
  
 
-
-
-
-   ###### SchrumpfeEineDatei(self, seqFolder, sFsFile, sFsFileNameOnly) ##############################################################################
-   def SchrumpfeEineDatei(self, seqFolder, sFsFile, sFsFileNameOnly):
-      #self.Info2Log(f"SchrumpfeEineDatei({sFsFileNameOnly})...")
-      try:
-
-         with Image.open(sFsFile).convert("RGB") as img:
-
-            dtExif = self.GetExifDate( img)
-
-            tStartPrepare = time.perf_counter()
-
-            img = ImageOps.exif_transpose(img) # Korrigiert die Drehung basierend auf EXIF-Daten
-
-            #Verkleinern, LANCZOS sorgt für hohe Qualität beim Resampling, BICUBIC ist schneller und weniger rechenintensiv
-            # ganzes Bild, leider verzerrt: img = img.resize((224, 224), Image.Resampling.LANCZOS)
-            # img = ImageOps.fit(img, (224, 224), method=Image.Resampling.LANCZOS)
-
-            if self.sModell ==  self.sModell224:
-               img = ImageOps.fit(img, (224, 224), method=Image.Resampling.LANCZOS)
-
-            elif  self.sModell ==  self.sModell336:
-                  img = ImageOps.fit(img, (336, 336), method=Image.Resampling.LANCZOS)
-
-
-            img_byte_arr = io.BytesIO()# Bild in Byte-Array umwandeln
-            img.save(img_byte_arr, format='JPEG')
-            img_byte_arr.seek(0) # Zurück zum Anfang des Buffers springen
-
-            dPrepareSumSec = ZeitmessungEinfach(tStartPrepare, self.dPrepareSumSec)
-
-            return CAnaData(sFsFileNameOnly, img_byte_arr, seqFolder, dtExif), dPrepareSumSec
-
-        
-      except Exception as e:
-         self.Exception2Log(f'SchrumpfeEineDatei()',e)
-         return None, 0.0
-      finally:
-         pass
-
-
    ###### FolderThread(self, pbar) ##############################################################################
    def FolderThread(self, pbar):
+      dauSchrumpfAlle = 0.0
       try:
          print(f"Start FolderThread()\n", end="")
 
@@ -853,7 +929,6 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
          cur = mariaDb.cursor()
 
          anzFolder = 0
-         dauSchrumpfAlle = 0.0
          while True:
             try:
                qfi =  self.queueFolder.get(timeout=3)
@@ -874,7 +949,8 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
 
             fileinfoDb = None
 
-            a16 = CAnaData16()
+            bun16 = self.bcp.get_bundle()
+            iIdx = 0 
 
             for sFsFile, sFsFileNameOnly in fsFiles.items():  #Hauptschleife
 
@@ -884,20 +960,26 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
                      if fileinfoDb.iConfi > 0:
                         self.anzDateienVorhanden += 1
                         continue  # diese Datei hat bereits Konfidenz-Sätze
+
+               sizePic = (224, 224) if self.sModell == self.sModell224 else (336, 336)
+               ret, dauSchrumpf,exc = bun16.listBilder[iIdx].BildHinzufuegen(qfi.seqFolder, sFsFile, sFsFileNameOnly, sizePic, self)
+               iIdx += 1
                   
-               ad, dauSchrumpf = self.SchrumpfeEineDatei(qfi.seqFolder, sFsFile, sFsFileNameOnly)
-               if ad == None:
+               if ret == False:
+                  if exc != None:
+                     self.Exception2Log(f'CBildContainer.BildHinzufuegen()',exc)
+
                   self.Error2Log(f"Bild übersprungen (defekt): {sFsFileNameOnly}")
                   continue
-               a16.listBilder.append( ad)
+
                dauSchrumpfAlle += dauSchrumpf
 
-               if len(a16.listBilder) > 15:
-                  self.queueBilder.put(a16)
-                  a16 = CAnaData16() #hier kein clear, sondern eine neue Instanz anlegen
+               if iIdx >= 16:
+                  self.queueBilder.put(bun16)
+                  iIdx = 0
 
-            if len(a16.listBilder) > 0:
-               self.queueBilder.put(a16)
+            if iIdx > 0:
+               self.queueBilder.put(bun16)
 
             anzFolder +=1
         
@@ -911,8 +993,9 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
          if 'mariaDb' in locals(): 
             mariaDb.commit()
             mariaDb.close()
+         
 
-         self.FolderThreadData2AppData( anzFolder, time.perf_counter() - tStartCommit)
+         self.FolderThreadData2AppData( anzFolder, time.perf_counter() - tStartCommit, dauSchrumpfAlle)
          print(f"Ende FolderThread(), erledigt: {anzFolder}\n", end="")
 
 
