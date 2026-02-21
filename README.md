@@ -1,8 +1,8 @@
-# piccat – Bildanalyse an Hand von Kategorien mit KI (torch/clip) 
+# piccat – Bildanalyse an Hand von Kategorien mit KI (```torch/clip```) 
 Ziel ist, an Hand fest definierter Kategorien Bilder in einem großen Datenbestand zu finden und in einem Bildbetrachter anzuzeigen.
 
 ## Danksagungen
-Groß Teile der Code-Architektur, der Client-Server-Schnittstelle, Performance-Optimierungen, Fehlerbehandlung und der Bildbetrachter wurden mit der Hilfe von Google Gemini entwickelt. 
+Teile der Code-Architektur, der Client-Server-Schnittstelle, Performance-Optimierungen, Fehlerbehandlung und der Bildbetrachter wurden mit der Hilfe von Google Gemini entwickelt. 
 
 ## Getestet mit
 - Lenovo E570 mit I7-7500 / Windows 10 Prof / MariaDB / tkinter viewer
