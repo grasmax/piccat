@@ -34,6 +34,9 @@
 
 import os
 import io
+import struct
+import requests
+
 import signal
 
 print("Lade torch") 
@@ -75,7 +78,9 @@ files_done = 0
 
 # Modell beim Import/Start einmalig laden
 print(f"--- Lade CLIP Modell auf {device} ---")
-model, preprocess = clip.load("ViT-B/32", device=device)
+#model, preprocess = clip.load("ViT-B/32", device=device)
+model, preprocess = clip.load("ViT-L/14@336px", device=device)
+
 
 # Fragmente aus den Versuchen mit bHalfPrec
 #  if self.device == "cuda" and self.bHalfPrec:
@@ -137,10 +142,7 @@ async def init_brain(request_data: InitRequest):
         return {"init_brain": "error", "message": str(e)}
 
 @app.post("/analyze")
-async def analyze(
-    lfdNr: int = Form(...), 
-    listImages: List[UploadFile] = File(...)  # Jetzt eine Liste von Dateien, 'listImages' muss dem Key im Client entsprechen
-):
+async def analyze(request: requests.Request):
    """ Hauptanalyse-Funktion """
 
    global files_done, global_pbar, max_files
@@ -159,16 +161,23 @@ async def analyze(
    ])
 
    tensors = []
-   filenames = []
         
    try:
       # 1. Alle Bilder sammeln und transformieren
-      for img_file in listImages:
-         image_bytes = await img_file.read() 
-         pil_image = Image.open(io.BytesIO(image_bytes))
-         # transform liefert (3, 224, 224), wir sammeln diese
+      data = request.get_data() 
+      offset = 0
+      anzBilder = 0
+      while offset < len(data):
+         # 1. Länge lesen (4 Bytes)
+         img_len = struct.unpack_parent('I', body[offset:offset+4])[0]
+         offset += 4
+         # 2. Bilddaten extrahieren
+         img_data = data[offset:offset+img_len]
+         offset += img_len
+
+         pil_image = Image.open(io.BytesIO(img_data))
          tensors.append(transform(pil_image))
-         filenames.append(img_file.filename)
+         anzBilder += 1
 
       # 2. Zu einem Batch-Tensor stapeln: Shape (16, 3, 224, 224)
       batch_tensor = torch.stack(tensors).to(device)
@@ -190,29 +199,33 @@ async def analyze(
 
 
       # 4. Ergebnisse aufbereiten: zip nimmt jeweils einen Wert aus top_indices und top_values
-      results = []
-      for i in range(len(listImages)):
+      # Beispiel-Ergebnisse (Kategorie-ID, Konfidenz)    
+      # results = [         (101, 98.5), (102, 45.0), (105, 12.3), # ... insgesamt 16 Paare       ]
+      flat_results = []
+
+      for i in range(anzBilder):
          pairs = [
             [category_ids[idx], round(float(val) * 100)] 
             for idx, val in zip(top_indices[i].tolist(), top_values[i].tolist())
          ]
+
+         for cat_id, conf in pairs:
+            flat_results.extend([cat_id, conf])
     
-         results.append({
-            "n": lfdNr + i,
-            "filename": filenames[i],
-            "confi": pairs  
-         })
+      # '16If' packt 16-mal ein Paar aus Int und Float hintereinander
+      binary_data = struct.pack('16If', *flat_results)
+    
 
       # Progressbar aktualisieren
-      files_done += len(listImages)
+      files_done += anzBilder
       global_pbar.set_postfix(file=f"{files_done}/{max_files}")
       global_pbar.n = files_done
       global_pbar.refresh() 
 
-      return {"results": results}
+      return request.Response(content=binary_data, media_type="application/octet-stream")
       
    except Exception as e:
-      return {"error": str(e), "n": lfdNr}
+      return {"error": str(e), "n": files_done}
 
 
 
