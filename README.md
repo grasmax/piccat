@@ -12,9 +12,9 @@ Teile der Code-Architektur, der Client-Server-Schnittstelle, Performance-Optimie
 
 ## Evolution
 **Lokale Analyse:**
-- [createdb.sql](https://github.com/grasmax/piccat/blob/main/createdb.sql) ... Datenbank-Schema für Kategorien, Dateien und Analyse-Ergebnisse, Schema-Bild s.u,
 - [piccat_csv.py](https://github.com/grasmax/piccat/blob/main/piccat_csv.py) ... lokale Analyse, Ergebnis in CSV-Datei
 - [piccat_db.py](https://github.com/grasmax/piccat/blob/main/piccat_db.py) ... lokale Analyse, Ergebnis in MariaDB, **Dauer 2,4 Sekunden pro Bild: 60 Stunden**
+- [createdb.sql](https://github.com/grasmax/piccat/blob/main/createdb.sql) ... Datenbank-Schema für Kategorien, Dateien und Analyse-Ergebnisse, Schema-Bild s.u,
   
 **Analyse auf einem Server:**
 - [piccat_server.py](https://github.com/grasmax/piccat/blob/main/piccat_server.py) ... Analyse in Server ausgelagert, 1 Bild pro Serverruf
