@@ -100,6 +100,7 @@ print( f"{tStartModulImport} Module für den Programmstart werden geladen...")
 #   print(f"\r Speed: {speed:.2f} Dateien/s | Erledigt: {current_done}/{self.total_files} | ETA: {eta_str}  ", end="", flush=True)
 
 import io
+import struct
 
 ###### class CategoryInfo: ##############################################################################
 ###### Container für die Kategorien     #################################################################
@@ -147,26 +148,6 @@ class CQueueFolderInfo:
         return f"CQueueFolderInfo(seqFolder={self.seqFolder}, sFolder={self.sFolder}')"
 
 
-###### class CAnaData: ##############################################################################
-###### Container für die Daten, die über die Queue an den Analyse-Thread übergeben werden  ######################
-class CAnaData:
-    def __init__(self, sFsFileNameOnly, img_byte_arr, seqFolder, dtExif):
-        self.sFsFileNameOnly = sFsFileNameOnly
-        self.img_byte_arr = img_byte_arr
-        self.seqFolder = seqFolder
-        self.dtExif = dtExif
-
-    def __repr__(self):
-        return f"CAnaData(sFsFileNameOnly='{self.sFsFileNameOnly}', img_byte_arr='{self.img_byte_arr}', seqFolder={self.seqFolder}, dtExif={self.dtExif})"
-
-###### class CAnaData16: ##############################################################################
-###### Container für das 16er-Bilddatenbündel, die über die Queue an den Analyse-Thread übergeben werden  ######################
-class CAnaData16:
-    def __init__(self):
-       self.listBilder = []
-
-    def __repr__(self):
-        return f"CAnaData16(Anzahl in self.listBilder='{len(self.listBilder)}')"
 
 #################################################################################################################################
 # Bei den Tests im Februar 2026 hat sich herausgestellt, dass das Allokieren von 90000 Byte-Arrays für die Bilder zu lange dauert
@@ -195,7 +176,7 @@ class CBildContainer:
       self.bio = io.BytesIO() 
 
       self.sFsFileNameOnly = ""
-      self.seqFolder = ""
+      self.seqFolder = 0
       self.dtExif = None
 
 
@@ -203,14 +184,9 @@ class CBildContainer:
    def BildHinzufuegen(self, seqFolder, sFsFile, sFsFileNameOnly, sizePic, app):
       #self.Info2Log(f"BildHinzufuegen({sFsFileNameOnly})...")
       try:
-         self.sFsFileNameOnly = sFsFileNameOnly
-         self.seqFolder = seqFolder
-
          with Image.open(sFsFile).convert("RGB") as img:
 
             self.dtExif = app.GetExifDate( img)
-
-            tStartPrepare = time.perf_counter()
 
             img = ImageOps.exif_transpose(img) # Korrigiert die Drehung basierend auf EXIF-Daten
 
@@ -219,19 +195,20 @@ class CBildContainer:
             # img = ImageOps.fit(img, (224, 224), method=Image.Resampling.LANCZOS)
             img = ImageOps.fit(img, sizePic, method=Image.Resampling.LANCZOS)
 
+
+            self.sFsFileNameOnly = sFsFileNameOnly
+            self.seqFolder = seqFolder
             self.bio.seek(0)          # Zeiger zurücksetzen - der Speicher von 'bio' wird wiederverwendet!
             self.bio.truncate(0)       # Den alten Inhalt logisch löschen, ohne den RAM freizugeben
 
             #print(f"BildHinzufuegen: bundle: {self.bundle_nr}, nr: {self.bild_nr} {sFsFileNameOnly}")
             img.save(self.bio, format='JPEG')      
 
-            dPrepareSumSec = ZeitmessungEinfach(tStartPrepare, 0.0)
-
-            return True, dPrepareSumSec, None
+            return True, None
 
         
       except Exception as e:
-         return False, 0.0, e
+         return False, e
       finally:
          pass
 
@@ -267,7 +244,7 @@ class CBildContainerX16:
 
 class CBildContainerX16Pool:
     def __init__(self):
-       anz = 8
+       anz = 20
        self.pool = queue.Queue(maxsize=anz)
        for a in range(anz ):
           self.pool.put( CBildContainerX16(self, a))
@@ -299,7 +276,7 @@ class CAnaThreadData:
         self.dMariaCommitSumSec = dMariaCommitSumSec
 
     def __repr__(self):
-        return f"""CAnaData(port='{self.port}', anzDateienErledigt='{self.anzDateienErledigt}', 
+        return f"""CAnaThreadData(port='{self.port}', anzDateienErledigt='{self.anzDateienErledigt}', 
                    dCallSumSec={self.dCallSumSec}, dCallMinSec={self.dCallMinSec}, dCallMaxSec={self.dCallMaxSec},
                    dMariaInsertSumSec={self.dMariaInsertSumSec}, dMariaCommitSumSec={self.dMariaCommitSumSec})"""
 
@@ -378,7 +355,7 @@ class CBildAnalyse (CBaseApp):
          self.sServerIp = self.Settings['Server']['IP'] 
          self.url_base = f"http://{self.sServerIp}"
          self.session = requests.Session() # Wichtig für Performance (Keep-Alive)
-         self.ServerPorts = [8000, 8001, 8002, 8003]
+         self.ServerPorts = [8000]#, 8001, 8002, 8003]
 
          self.queueFolder = None
          self.threadsEbene2 = []
@@ -686,11 +663,35 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
       finally:
          pass
 
+   ###### HoleSeqNummern(self, cur) ##############################################################################
+   def HoleSeqNummern(self, cur):
+      try:
+         aSeq = []
+
+         sStmt = f"SELECT NEXT VALUE FOR {self.MariaDbName}.piccat_seq_file FROM {self.MariaDbName}.seq_1_to_16"
+         cur.execute( sStmt)
+
+         rec = cur.fetchone()
+         if rec == None:
+            self.vScriptAbbruch(f'Fehler in HoleSeqNummern() / {sStmt}'  )
+         else:
+            while rec != None:
+               aSeq.append( rec[0])
+               rec = cur.fetchone()
+
+         return aSeq
+
+      except Exception as e:
+         self.Exception2Log(f'HoleSeqNummern()',e)
+         return None
+      finally:
+         pass
+
 
    ###### DateiAnlegen(self, seqFolder, sFile, dtExif, cur) ##############################################################################
    def DateiAnlegen(self, seqFolder, sFile, dtExif, cur):
       try:
-         sStmt = f"SELECT NEXT VALUE FOR {self.MariaDbName}.piccat_seq_file;"
+         sStmt = f"SELECT NEXT VALUE FOR {self.MariaDbName}.piccat_seq_file"
          cur.execute( sStmt)
          rec = cur.fetchone()
          if rec == None:
@@ -829,19 +830,22 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
          anzFolder = 0
          while True:
             try:
-               qfi =  self.queueFolder.get(timeout=3)
+               qfi =  self.queueFolder.get(timeout=30)
             except queue.Empty:
                break # keine weiteren Verzeichnisse -->  abbrechen
+
+            if qfi is None:
+               break # Beenden-Signal --> abbrechen
 
             pfad = Path(qfi.sFolder) # Dateien aus dem Dateisystem lesen...
             fsFiles = {str(d): d.name for d in pfad.glob('*.jp*')}
             anzFsFiles = len(fsFiles)
 
             if self.bVervollstaendigen:
-               aDbFiles = self.DbDateienLesen( sFolder, folderinfoDb.seqFolder, cur) # aus DB lesen
+               aDbFiles = self.DbDateienLesen( qfi.sFolder, folderinfoDb.seqFolder, cur) # aus DB lesen
                if aDbFiles != None:
                   for sDbFile, fiDb in aDbFiles.items():
-                     bDelete = True if fsFiles.get(f"{sFolder}\\{sDbFile}") is None else False
+                     bDelete = True if fsFiles.get(f"{qfi.sFolder}\\{sDbFile}") is None else False
                      if bDelete:
                         self.DateiLoeschen( fiDb.seqFile, sDbFile, cur)
 
@@ -861,8 +865,10 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
                         continue  # diese Datei hat bereits Konfidenz-Sätze
 
                sizePic = (224, 224) if self.sModell == self.sModell224 else (336, 336)
-               ret, dauSchrumpf,exc = bun16.listBilder[iIdx].BildHinzufuegen(qfi.seqFolder, sFsFile, sFsFileNameOnly, sizePic, self)
-               iIdx += 1
+
+               tStartPrepare = time.perf_counter()
+               ret, exc = bun16.listBilder[iIdx].BildHinzufuegen(qfi.seqFolder, sFsFile, sFsFileNameOnly, sizePic, self)
+               dauSchrumpf = ZeitmessungEinfach(tStartPrepare, 0.0)
                   
                if ret == False:
                   if exc != None:
@@ -871,6 +877,7 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
                   self.Error2Log(f"Bild übersprungen (defekt): {sFsFileNameOnly}")
                   continue
 
+               iIdx += 1
                dauSchrumpfAlle += dauSchrumpf
 
                if iIdx >= 16:
@@ -900,6 +907,26 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
          print(f"Ende FolderThread(), erledigt: {anzFolder}\n", end="")
 
 
+   #################################################################################################################################
+   def prepare_raw_payload(self, bild_container_liste):
+       """
+       Packt 16 Bilder in einen einzigen binären Stream.
+       Format: [Länge Bild 1 (4 Bytes)][Daten Bild 1][Länge Bild 2 (4 Bytes)]...
+       """
+       payload = io.BytesIO()
+    
+       for container in bild_container_liste:
+           if container.seqFolder == 0:
+              continue
+           img_data = container.bio.getbuffer()
+           img_len = len(img_data)
+        
+           # 1. Schreibe die Länge des Bildes als Unsigned Int (4 Bytes, Big Endian)
+           payload.write(struct.pack('I', img_len))
+           # 2. Schreibe die Bilddaten direkt aus dem Buffer
+           payload.write(img_data)
+    
+       return payload.getvalue() # Gibt den gesamten Block als ein bytes-Objekt zurück
 
 
    ###### AnalysierenSpeichernThread(self, pbar, atd) ##############################################################################
@@ -913,9 +940,7 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
 
          print(f"Start AnalysierenSpeichernThread(Port: {atd.port})\n", end="")
 
-         dictBilder = {}
-         files = []
-         payload = None
+         raw_data = None
 
          while True:
             try:
@@ -930,21 +955,15 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
             payload = {'lfdNr': atd.anzDateienErledigt+1} # seqFile hier noch nicht bekannt
 
             try:               
-               for ad in bun16.listBilder:
-                  if ad is None:
-                     continue
-                  files.append(('listImages', (ad.sFsFileNameOnly, ad.bio.getbuffer(), 'image/jpeg')))
-                  dictBilder[ad.sFsFileNameOnly] = CBildDaten(ad.seqFolder, ad.sFsFileNameOnly, ad.dtExif)
-            
+               aSeq = self.HoleSeqNummern( cur)
+               raw_data = self.prepare_raw_payload(bun16.listBilder)
 
-               # ... und an den Server senden
                tStartAna = time.perf_counter()
-
                response = None
                maxVersuche = 3
                for versuch in range(maxVersuche):
                   try:
-                     response = self.session.post(f"{self.url_base}:{atd.port}/analyze", files=files, data=payload,timeout=30)
+                     response = self.session.post(  f"{self.url_base}:{atd.port}/analyze", data=raw_data, headers={'Content-Type': 'application/octet-stream'}, timeout=30)
                      if response.status_code == 200:
                         break
 
@@ -959,15 +978,17 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
                atd.dCallMinSec, atd.dCallMaxSec, atd.dCallSumSec = Zeitmessung(tStartAna, atd.dCallMinSec, atd.dCallMaxSec, atd.dCallSumSec)
 
                if response.status_code != 200:
-                  self.Error2Log(f"Fehler in AnalysierenSpeichernThread({len(files)}: {self.url_base}:{atd.port}/analyze: response.status_code: {response.status_code}")
+                  self.Error2Log(f"Fehler in AnalysierenSpeichernThread( {self.url_base}:{atd.port}/analyze: response.status_code: {response.status_code}")
                   return
 
-               data = response.json()
-
-               batch_results = data.get("results", [])
-               for i, res in enumerate(batch_results):
-                  sFileName = res.get("filename")
-                  bd = dictBilder[sFileName] 
+               raw_bytes = response.content
+               # Wurde auf dem Server so eingepackt: binary_data.extend(struct.pack('<hh', cat_id, conf))
+               pair_size = struct.calcsize('<hh') # Ein Paar (short, short) ist 4 Bytes groß
+    
+               for img_idx, bd in enumerate(bun16.listBilder):
+            
+                  if len(bd.sFsFileNameOnly) <= 0:
+                     continue
 
                   tStartDb = time.perf_counter()
 
@@ -976,17 +997,22 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
                      self.anzDateienFehler += 1
                      continue
 
-                  for i, (seqKat, iKonfi) in enumerate(res["confi"]):
-                     if self.iMinTrefferProzent < iKonfi or i == 0:
+
+                  for pair_idx in range(5):                         # umwandeln des flachen Byte-Stream zurück in die 16x10 Struktur
+                     offset = (img_idx * 5 + pair_idx) * pair_size  # Berechne die aktuelle Position im Byte-Stream
+                     chunk = raw_bytes[offset : offset + pair_size]  # Extrahiere 4 Bytes und entpacke sie als zwei Shorts
+                     seqKat, iKonfi = struct.unpack('<hh', chunk)
+                     if seqKat <= 0:
+                        continue
+
+                     if self.iMinTrefferProzent < iKonfi or pair_idx == 0:
                         catinfo = self.dictKat.get(seqKat)
                         sStmt = f"INSERT INTO {self.MariaDbName}.piccat_tab_confidence (seqRun, seqFile, seqFolder, seqCategory, iConfidence) VALUES ( ?, ?, ?, ?, ?)"
                         cur.execute( sStmt, (self.iLaufNr, seqFile, bd.seqFolder, seqKat, iKonfi))
 
                   atd.dMariaInsertSumSec = ZeitmessungEinfach(tStartDb, atd.dMariaInsertSumSec)
                         
-               atd.anzDateienErledigt += len(files)
-               files.clear()
-               dictBilder.clear()
+               atd.anzDateienErledigt += len(bun16.listBilder)
 
                tStartCommit = time.perf_counter()
                mariaDb.commit()
@@ -1025,7 +1051,7 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
 
       # Ebene 2 holt Verzeichnis aus der QueueFolder, liest Bilder zum Verzeichnis, staucht sie und stellt sie als 16er Bündel in die QueueBilder
       self.threadsEbene2 = []
-      for t in range(2):
+      for t in range(3):
          t = threading.Thread(target=self.FolderThread, args=(self.pbar,))
          t.daemon = True # Thread stirbt, wenn Hauptprogramm endet
          t.start()
@@ -1142,7 +1168,7 @@ def main(argv):
       # ba.FolderThread( ba.pbar)
       # atd = CAnaThreadData( port=8000, anzDateienErledigt=0, dCallSumSec=0.0, dCallMinSec=sys.float_info.max, dCallMaxSec=0.0, dMariaInsertSumSec=0.0, dMariaCommitSumSec=0.0)
       # ba.AnalysierenSpeichernThread(ba.pbar, atd)
-      ba.StarteThreads() # 2 Bild-Schrumpfer, 4 Verteiler
+      ba.StarteThreads() # 3 Bild-Schrumpfer, 4 Verteiler
 
 
       # while 0 < ba.queueFolder.qsize() or 0 < ba.queueBilder.qsize():
@@ -1189,8 +1215,11 @@ def main(argv):
          ba.queueBilder.put(None)
 
       # 3. Jetzt erst in die Überwachungs-Schleife
+      while any(t.is_alive() for t in ba.threadsEbene2):
+         sleep(0.1)
       while any(t.is_alive() for t, atd in ba.threadsEbene3):
          aktueller_stand = sum(atd.anzDateienErledigt for t,atd in ba.threadsEbene3)# Summe bilden (Sicher ohne Lock)
+         sleep(0.1)
       monitor.update_display(aktueller_stand)
 
       ba.vEndeNormal( ba.Abschluss())
