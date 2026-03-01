@@ -50,6 +50,7 @@ from gmbasis import CBaseApp
 from gmbasis import Zeitmessung
 from gmbasis import ZeitmessungEinfach
 from gmbasis import ProgressMonitor
+from gmbasis import ProgressLogger
 
 from pathlib import Path
 
@@ -196,13 +197,14 @@ class CBildContainer:
             img = ImageOps.fit(img, sizePic, method=Image.Resampling.LANCZOS)
 
 
-            self.sFsFileNameOnly = sFsFileNameOnly
-            self.seqFolder = seqFolder
             self.bio.seek(0)          # Zeiger zurücksetzen - der Speicher von 'bio' wird wiederverwendet!
             self.bio.truncate(0)       # Den alten Inhalt logisch löschen, ohne den RAM freizugeben
 
-            #print(f"BildHinzufuegen: bundle: {self.bundle_nr}, nr: {self.bild_nr} {sFsFileNameOnly}")
+            #self.PrintLogger.log_progress(f"BildHinzufuegen: bundle: {self.bundle_nr}, nr: {self.bild_nr} {sFsFileNameOnly}")
             img.save(self.bio, format='JPEG')      
+
+            self.sFsFileNameOnly = sFsFileNameOnly
+            self.seqFolder = seqFolder
 
             return True, None
 
@@ -227,7 +229,8 @@ class CBildContainer:
          self.seqFolder = ""
          self.dtExif = None
       except Exception as e:
-         print(f'main()',e)
+         pass
+         #$$ self.PrintLogger.log_normal(f'main()',e)
 
 class CBildContainerX16:
    def __init__(self, pool, bundle_nr):
@@ -355,7 +358,9 @@ class CBildAnalyse (CBaseApp):
          self.sServerIp = self.Settings['Server']['IP'] 
          self.url_base = f"http://{self.sServerIp}"
          self.session = requests.Session() # Wichtig für Performance (Keep-Alive)
-         self.ServerPorts = [8000]#, 8001, 8002, 8003]
+         self.ServerPorts = [8000, 8001, 8002, 8003]
+
+         self.threadstopevent = threading.Event()
 
          self.queueFolder = None
          self.threadsEbene2 = []
@@ -549,7 +554,7 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
          if 0 < anzahl_bilder:
             ergebnis_liste[root] = os.path.basename(root)
             self.iAllFiles += anzahl_bilder
-            print(f"\r Dateien: {self.iAllFiles}  ", end="", flush=True)
+            self.PrintLogger.log_progress(f"Dateien: {self.iAllFiles}  ")
 
       return ergebnis_liste
 
@@ -566,7 +571,7 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
          # viel besser:
          self.fsFolder = self.LiesVerzeichnisse(self.sDateipfad)
 
-         #self.fsFolder[self.sDateipfad] = self.sDateipfad
+         # self.fsFolder[self.sDateipfad] = self.sDateipfad
 
          self.Info2Log(f"Filesystem-Verzeichnisse: {len(self.fsFolder)}")
 
@@ -818,8 +823,9 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
    ###### FolderThread(self, pbar) ##############################################################################
    def FolderThread(self, pbar):
       dauSchrumpfAlle = 0.0
+      got_item = False
       try:
-         print(f"Start FolderThread()\n", end="")
+         self.PrintLogger.log_normal(f"Start FolderThread()")
 
          # EIGENE Verbindung für den Thread (Wichtig für MariaDB!)
          # Falls du eine globale Verbindung nutzt, stelle sicher, 
@@ -829,70 +835,83 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
 
          anzFolder = 0
          while True:
+            got_item = False
             try:
                qfi =  self.queueFolder.get(timeout=30)
+               got_item = True 
             except queue.Empty:
                break # keine weiteren Verzeichnisse -->  abbrechen
 
-            if qfi is None:
+            if qfi is None or self.threadstopevent.is_set():
+               if got_item:
+                  self.queueFolder.task_done()
                break # Beenden-Signal --> abbrechen
 
-            pfad = Path(qfi.sFolder) # Dateien aus dem Dateisystem lesen...
-            fsFiles = {str(d): d.name for d in pfad.glob('*.jp*')}
-            anzFsFiles = len(fsFiles)
-
-            if self.bVervollstaendigen:
-               aDbFiles = self.DbDateienLesen( qfi.sFolder, folderinfoDb.seqFolder, cur) # aus DB lesen
-               if aDbFiles != None:
-                  for sDbFile, fiDb in aDbFiles.items():
-                     bDelete = True if fsFiles.get(f"{qfi.sFolder}\\{sDbFile}") is None else False
-                     if bDelete:
-                        self.DateiLoeschen( fiDb.seqFile, sDbFile, cur)
-
-            fileinfoDb = None
-
-            bun16 = self.bcp.get_bundle()
-            #print(f"FolderThread: self.bcp.get_bundle({bun16.bundle_nr})")
-            iIdx = 0 
-
-            for sFsFile, sFsFileNameOnly in fsFiles.items():  #Hauptschleife
+            try:
+               pfad = Path(qfi.sFolder) # Dateien aus dem Dateisystem lesen...
+               fsFiles = {str(d): d.name for d in pfad.glob('*.jp*')}
+               anzFsFiles = len(fsFiles)
 
                if self.bVervollstaendigen:
-                  fileinfoDb = aDbFiles.get(sFsFileNameOnly)
-                  if fileinfoDb != None:
-                     if fileinfoDb.iConfi > 0:
-                        self.anzDateienVorhanden += 1
-                        continue  # diese Datei hat bereits Konfidenz-Sätze
+                  aDbFiles = self.DbDateienLesen( qfi.sFolder, folderinfoDb.seqFolder, cur) # aus DB lesen
+                  if aDbFiles != None:
+                     for sDbFile, fiDb in aDbFiles.items():
+                        bDelete = True if fsFiles.get(f"{qfi.sFolder}\\{sDbFile}") is None else False
+                        if bDelete:
+                           self.DateiLoeschen( fiDb.seqFile, sDbFile, cur)
 
-               sizePic = (224, 224) if self.sModell == self.sModell224 else (336, 336)
+               fileinfoDb = None
 
-               tStartPrepare = time.perf_counter()
-               ret, exc = bun16.listBilder[iIdx].BildHinzufuegen(qfi.seqFolder, sFsFile, sFsFileNameOnly, sizePic, self)
-               dauSchrumpf = ZeitmessungEinfach(tStartPrepare, 0.0)
+               bun16 = self.bcp.get_bundle()
+               #self.PrintLogger.log_normal(f"FolderThread: self.bcp.get_bundle({bun16.bundle_nr})")
+               iIdx = 0 
+
+               for sFsFile, sFsFileNameOnly in fsFiles.items():  #Hauptschleife
+
+                  if self.threadstopevent.is_set():
+                     break
+
+                  if self.bVervollstaendigen:
+                     fileinfoDb = aDbFiles.get(sFsFileNameOnly)
+                     if fileinfoDb != None:
+                        if fileinfoDb.iConfi > 0:
+                           self.anzDateienVorhanden += 1
+                           continue  # diese Datei hat bereits Konfidenz-Sätze
+
+                  sizePic = (224, 224) if self.sModell == self.sModell224 else (336, 336)
+
+                  tStartPrepare = time.perf_counter()
+                  ret, exc = bun16.listBilder[iIdx].BildHinzufuegen(qfi.seqFolder, sFsFile, sFsFileNameOnly, sizePic, self)
+                  dauSchrumpfAlle += ZeitmessungEinfach(tStartPrepare, 0.0)
                   
-               if ret == False:
-                  if exc != None:
-                     self.Exception2Log(f'CBildContainer.BildHinzufuegen()',exc)
+                  if ret == False:
+                     if exc != None:
+                        self.Exception2Log(f'CBildContainer.BildHinzufuegen()',exc)
 
-                  self.Error2Log(f"Bild übersprungen (defekt): {sFsFileNameOnly}")
-                  continue
+                     self.Error2Log(f"Bild übersprungen (defekt): {sFsFileNameOnly}")
+                     continue
 
-               iIdx += 1
-               dauSchrumpfAlle += dauSchrumpf
+                  iIdx += 1
+                  if iIdx >= 16:
+                     self.queueBilder.put(bun16)
+                     bun16 = self.bcp.get_bundle()
+                     #self.PrintLogger.log_normal(f"FolderThread: self.bcp.get_bundle({bun16.bundle_nr})")
+                     iIdx = 0
 
-               if iIdx >= 16:
+               if iIdx > 0:
                   self.queueBilder.put(bun16)
-                  bun16 = self.bcp.get_bundle()
-                  #print(f"FolderThread: self.bcp.get_bundle({bun16.bundle_nr})")
-                  iIdx = 0
 
-            if iIdx > 0:
-               self.queueBilder.put(bun16)
+               anzFolder +=1
 
-            anzFolder +=1
+            except Exception as e:
+               self.Exception2Log(f'FolderThread(1)',e)
+            finally:
+               if got_item:
+                  self.queueFolder.task_done()
+
         
       except Exception as e:
-         self.Exception2Log(f'FolderThread()',e)
+         self.Exception2Log(f'FolderThread(2)',e)
       finally:
          tStartCommit = time.perf_counter()
 
@@ -901,10 +920,9 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
          if 'mariaDb' in locals(): 
             mariaDb.commit()
             mariaDb.close()
-         
 
          self.FolderThreadData2AppData( anzFolder, time.perf_counter() - tStartCommit, dauSchrumpfAlle)
-         print(f"Ende FolderThread(), erledigt: {anzFolder}\n", end="")
+         self.PrintLogger.log_normal(f"Ende FolderThread(), erledigt: {anzFolder}")
 
 
    #################################################################################################################################
@@ -916,7 +934,7 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
        payload = io.BytesIO()
     
        for container in bild_container_liste:
-           if container.seqFolder == 0:
+           if container.seqFolder == 0 or len(container.sFsFileNameOnly) <= 0:
               continue
            img_data = container.bio.getbuffer()
            img_len = len(img_data)
@@ -931,6 +949,7 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
 
    ###### AnalysierenSpeichernThread(self, pbar, atd) ##############################################################################
    def AnalysierenSpeichernThread(self, pbar, atd):
+      got_item = False
       try:
          # EIGENE Verbindung für den Thread (Wichtig für MariaDB!)
          # Falls du eine globale Verbindung nutzt, stelle sicher, 
@@ -938,24 +957,29 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
          mariaDb = mariadb.connect( host=self.MariaIp, port=3306,user=str(self.aes.decrypt(self.MariaUserCode)), password=str(self.aes.decrypt(self.MariaPwdCode)))
          cur = mariaDb.cursor()
 
-         print(f"Start AnalysierenSpeichernThread(Port: {atd.port})\n", end="")
+         self.PrintLogger.log_normal(f"Start AnalysierenSpeichernThread(Port: {atd.port})")
 
          raw_data = None
 
          while True:
+            got_item = False
             try:
                bun16 =  self.queueBilder.get(timeout=30) # 16er Bündel abholen, Timeout von 3 auf 30 Sekunden erhöht, damit sich die Threads nicht gleich beenden, wenn die Ebene 2 noch nichts gelifert hat
-               #print(f"Ana: get bundle {bun16.bundle_nr}")
+               #self.PrintLogger.log_normal(f"Ana: get bundle {bun16.bundle_nr}")
+               got_item = True 
+
             except queue.Empty:
                break # keine weiteren Bilder --> abbrechen
 
-            if bun16 is None:
+            if bun16 is None or self.threadstopevent.is_set():
+               if got_item:
+                  self.queueBilder.task_done()
                break # Beenden-Signal --> abbrechen
 
             payload = {'lfdNr': atd.anzDateienErledigt+1} # seqFile hier noch nicht bekannt
 
             try:               
-               aSeq = self.HoleSeqNummern( cur)
+              #$$ aSeq = self.HoleSeqNummern( cur)
                raw_data = self.prepare_raw_payload(bun16.listBilder)
 
                tStartAna = time.perf_counter()
@@ -972,19 +996,30 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
                         time.sleep(2 * (versuch + 1)) # Exponentielles Warten (2s, 4s...)
                         continue
                      else:
-                        self.Exception2Log(f'AnalysierenSpeichernThread(): analyse() konnte wiederholt nicht gerufen werden.',e)
+                        self.Exception2Log(f'AnalysierenSpeichernThread(1): analyse() konnte wiederholt nicht gerufen werden.',e)
                         return
 
                atd.dCallMinSec, atd.dCallMaxSec, atd.dCallSumSec = Zeitmessung(tStartAna, atd.dCallMinSec, atd.dCallMaxSec, atd.dCallSumSec)
 
                if response.status_code != 200:
-                  self.Error2Log(f"Fehler in AnalysierenSpeichernThread( {self.url_base}:{atd.port}/analyze: response.status_code: {response.status_code}")
-                  return
+                  data = response.json()
+                  sErrText = data.get("Fehlertext")
+                  self.Error2Log(f"Fehler im AnalyseThread( {atd.port})/analyze: Fehler-Nr: {response.status_code}: {sErrText}")
+
+                  for img_idx, bd in enumerate(bun16.listBilder):
+                     if 0 < len (bd.sFsFileNameOnly):
+                        self.Error2Db(f"Analysefehler bei Bun16({bun16.bundle_nr}/{img_idx}): {bd.seqFolder}\\{bd.sFsFileNameOnly}")
+                  continue
+               # else:
+               #    for img_idx, bd in enumerate(bun16.listBilder):
+               #       if 0 < len (bd.sFsFileNameOnly):
+               #          self.Info2Log(f"Analyse: {bd.seqFolder}\\{bd.sFsFileNameOnly}")
 
                raw_bytes = response.content
                # Wurde auf dem Server so eingepackt: binary_data.extend(struct.pack('<hh', cat_id, conf))
                pair_size = struct.calcsize('<hh') # Ein Paar (short, short) ist 4 Bytes groß
     
+               anzBilder = 0
                for img_idx, bd in enumerate(bun16.listBilder):
             
                   if len(bd.sFsFileNameOnly) <= 0:
@@ -996,12 +1031,17 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
                   if seqFile == -1:
                      self.anzDateienFehler += 1
                      continue
-
+                  else:
+                     anzBilder += 1
 
                   for pair_idx in range(5):                         # umwandeln des flachen Byte-Stream zurück in die 16x10 Struktur
                      offset = (img_idx * 5 + pair_idx) * pair_size  # Berechne die aktuelle Position im Byte-Stream
                      chunk = raw_bytes[offset : offset + pair_size]  # Extrahiere 4 Bytes und entpacke sie als zwei Shorts
-                     seqKat, iKonfi = struct.unpack('<hh', chunk)
+                     try:
+                        seqKat, iKonfi = struct.unpack('<hh', chunk)
+                     except Exception as e:
+                        self.Exception2Log(f'AnalysierenSpeichernThread(2)/struct.unpack',e)
+
                      if seqKat <= 0:
                         continue
 
@@ -1012,26 +1052,27 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
 
                   atd.dMariaInsertSumSec = ZeitmessungEinfach(tStartDb, atd.dMariaInsertSumSec)
                         
-               atd.anzDateienErledigt += len(bun16.listBilder)
+               atd.anzDateienErledigt += anzBilder
 
                tStartCommit = time.perf_counter()
                mariaDb.commit()
                atd.dMariaCommitSumSec = ZeitmessungEinfach(tStartCommit, atd.dMariaCommitSumSec)
 
             except Exception as e:
-               self.Exception2Log(f'AnalysierenSpeichernThread()',e)
+               self.Exception2Log(f'AnalysierenSpeichernThread(3)',e)
             finally:
-               self.queueBilder.task_done()
-               #print(f"Ana: release bundle {bun16.bundle_nr}")
+               if got_item:
+                  self.queueBilder.task_done()
+               #self.PrintLogger.log_normal(f"Ana: release bundle {bun16.bundle_nr}")
                bun16.release()
-               #print(f"task_done()(Port: {atd.port})")
+               #self.PrintLogger.log_normal(f"task_done()(Port: {atd.port})")
 
 
          # self.NimmZwischenzeit()
 
         
       except Exception as e:
-         self.Exception2Log(f'AnalysierenSpeichernThread()',e)
+         self.Exception2Log(f'AnalysierenSpeichernThread(4)',e)
       finally:
          self.ThreadData2AppAData( atd)
 
@@ -1041,13 +1082,66 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
             mariaDb.commit()
             mariaDb.close()
 
-         print(f"Ende AnalysierenSpeichernThread(Port: {atd.port}), erledigt: {self.anzDateienErledigt}\n", end="")
+         self.PrintLogger.log_normal(f"Ende AnalysierenSpeichernThread(Port: {atd.port}), erledigt: {atd.anzDateienErledigt}")
 
+
+   ###### LoggingThread(self, pbar) ##############################################################################
+   def LoggingThread(self, pbar):
+      got_item = False
+      try:
+         self.PrintLogger.log_normal(f"Start LoggingThread()")
+
+         # EIGENE Verbindung für den Thread (Wichtig für MariaDB!)
+         # Falls du eine globale Verbindung nutzt, stelle sicher, 
+         # dass NUR dieser Thread sie verwendet.
+         mariaDb = mariadb.connect( host=self.MariaIp, port=3306,user=str(self.aes.decrypt(self.MariaUserCode)), password=str(self.aes.decrypt(self.MariaPwdCode)))
+         cur = mariaDb.cursor()
+
+         while True:
+            got_item = False
+            try:
+               log =  self.queueLogging.get(timeout=7200)
+               got_item = True 
+            except queue.Empty:
+               break # keine weiteren Einträge -->  abbrechen
+
+            # alles muss weggeschrieben werden --> nicht abbrechbar
+            # if log is None or self.threadstopevent.is_set():
+            #    if got_item:
+            #       self.queueFolder.task_done()
+            #    break # Beenden-Signal --> abbrechen
+
+            try:
+               if log[0] == "db_only":
+                  self.Queue2Db( log[1], log[2], log[3], mariaDb, cur)
+               elif log[2] == "info":
+                  self.Queue2Log( log[1], log[2], log[3], mariaDb, cur)
+               
+            except Exception as e:
+               self.Exception2Log(f'LoggingThread(1)',e)
+            finally:
+               if got_item:
+                  self.queueLogging.task_done()
+
+        
+      except Exception as e:
+         self.Exception2Log(f'LoggingThread(2)',e)
+      finally:
+         self.Queue2Db(datetime.datetime.now(), "info", f"Ende LoggingThread()", self.mdbLog, self.mdbLog.cursor() )
  
 
    ###### StarteThreads(self) 2 Schrumpfer, 4 Verteiler erzeugen ##############################
    def StarteThreads(self):
       self.Info2Log("Alle nötigen Threads starten")
+
+      # Thread-safe Log-Thread
+      self.threadsLogging = []
+      for t in range(1):
+         t = threading.Thread(target=self.LoggingThread, args=(self.pbar,))
+         t.daemon = True # Thread stirbt, wenn Hauptprogramm endet
+         t.start()
+         self.threadsLogging.append(t)
+
 
       # Ebene 2 holt Verzeichnis aus der QueueFolder, liest Bilder zum Verzeichnis, staucht sie und stellt sie als 16er Bündel in die QueueBilder
       self.threadsEbene2 = []
@@ -1093,7 +1187,7 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
 
          for p in self.ServerPorts:
              url = f"{self.url_base}:{p}/init_brain"
-             print(f"Initialisiere Port {p}...")
+             self.PrintLogger.log_normal(f"Initialisiere Port {p}...")
              resp = self.session.post(url, json=cl, timeout=20)
 
              self.Info2Log(f"{self.url_base}:{p}/init_brain: {resp.json()}")
@@ -1117,7 +1211,7 @@ Dauer commitMariaDb in Minuten: {round(self.dMariaCommitSumSec/60.0, 2)}"""
          self.ErgebnisseInsLog()
 
          if self.bFehlerpruefen:
-            print(f"Es sind Fehler aufgetreten. Bitte das Log prüfen.")
+            self.PrintLogger.log_normal(f"Es sind Fehler aufgetreten. Bitte das Log prüfen.")
             return f"Bildanalyse mit Fehlern."
 
          return f"\nDetails zur Bildanalyse siehe Log."
@@ -1174,11 +1268,13 @@ def main(argv):
       # while 0 < ba.queueFolder.qsize() or 0 < ba.queueBilder.qsize():
       #    sleep(60)
 
-      monitor = ProgressMonitor(ba.iAllFiles)
+      monitor = ProgressMonitor(ba.iAllFiles, ba.PrintLogger)
       while any(t.is_alive() for t,atd in ba.threadsEbene3):
           
           aktueller_stand = sum(atd.anzDateienErledigt for t,atd in ba.threadsEbene3)# Summe bilden (Sicher ohne Lock)
           monitor.update_display(aktueller_stand)
+          if ba.iAllFiles <= aktueller_stand:
+             break
           time.sleep(3.0)
       
 
@@ -1196,12 +1292,16 @@ def main(argv):
       ba.mdb.commit()
       ba.Info2Log("\nProgramm mit STRG+C abgebrochen.")
 
+      ba.threadstopevent.set() # Signalisierte ALLEN Threads gleichzeitig: STOPP!
     
       # 1. Die Queue leeren (optional, aber beschleunigt den Abbruch)
       try:
          while True:
             ba.queueFolder.get_nowait()
             ba.queueFolder.task_done()
+      except queue.Empty:
+         pass
+      try:
          while True:
             ba.queueBilder.get_nowait()
             ba.queueBilder.task_done()
